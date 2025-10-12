@@ -1,0 +1,41 @@
+# ----------------------------------------------------------------------------
+# 数据集参数 (Dataset Parameters)
+# ----------------------------------------------------------------------------
+# 数据集根目录的路径
+# euroc：/home/pangjunxiang/dataset/Euroc/MH_01_easy
+# tum：/home/pangjunxiang/dataset/TUM/freiburg1
+dataset_path: "/home/pangjunxiang/dataset/Euroc/MH_01_easy"
+
+# 支持euroc和tum数据集
+dataset_type: "euroc"
+
+max_loops: 10
+
+# 视觉前端配置参数
+# 点云滤除的置信度阈值
+confidence_threshold: 0.9
+
+# 使用GPU的ID
+gpu_id: 4
+
+# IMU配置参数
+gravity: 9.81
+
+# 注意这里只是sigma，不是sigma^2
+accel_noise_sigma: 0.01
+gyro_noise_sigma: 0.001
+accel_bias_rw_sigma: 0.000001 # 零偏随机游走
+gyro_bias_rw_sigma: 0.000001
+
+# 初始化窗口大小
+init_window_size: 11
+
+# 初始化外参
+T_bc: [0.0148655429818, -0.999880929698, 0.00414029679422, -0.0216401454975,
+       0.999557249008, -0.0149672133247, 0.025715529948, -0.064676986768,
+      -0.0257744366974, 0.00375618835797, 0.999660727178, 0.00981073058949,
+       0.0, 0.0, 0.0, 1.0]
+
+
+# 轨迹输出路径
+trajectory_output_path: "output/estimated_trajectory.txt" 
