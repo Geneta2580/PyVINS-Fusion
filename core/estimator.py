@@ -8,29 +8,26 @@ from .backend import Backend
 from .keyframe import KeyFrame
 from .submap import Submap
 from .global_map import GlobalMap
+from .imu_process import IMUProcessor
 from utils.geometry import align_submaps, pose_matrix_to_tum_format
 from .vio_initializer import VIOInitializer
 
-from vggt.utils.geometry import closed_form_inverse_se3, unproject_depth_map_to_point_map
 
-class IVGGTSystem:
+class Estimator(threading.Thread):
     """
     The central coordinator for the SLAM system. Runs as a consumer thread.
     """
-    def __init__(self, config, input_queue, viewer_queue, global_central_map, imu_processor, backend):
+    def __init__(self, config, input_queue, viewer_queue, global_central_map):
+        super().__init__()
+        self.daemon = True
         self.config = config
         self.input_queue = input_queue
+        self.global_map = global_central_map
         self.viewer_queue = viewer_queue
 
-        # 从配置文件中读取置信度阈值，如果未定义则使用默认值0.9
-        self.confidence_threshold = self.config.get('confidence_threshold', 0.9)
-        # print(f"Point cloud confidence threshold set to: {self.confidence_threshold}")
-        
-        # Viewer and Map are managed here, but viewer is passed in from main for thread control
-        self.viewer = None
-        self.backend = backend
-        self.global_map = global_central_map
-        
+        self.imu_processor = IMUProcessor(config)
+
+            
         self.submap_counter = 0
         self.submaps = {}
 
@@ -39,7 +36,6 @@ class IVGGTSystem:
         self.init_kf_buffer = []
         self.init_imu_factors_buffer = []
         self.init_window_size = self.config.get('init_window_size', 10)
-        self.imu_processor = imu_processor
 
         # Threading control
         self.is_running = False

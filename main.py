@@ -10,17 +10,13 @@ import torch
 import cv2
 
 from utils.dataloader import UnifiedDataloader
-from core.imu_process import IMUProcessor
-from core.global_map import GlobalMap
-from core.system import IVGGTSystem
-from core.frontend import Frontend
-from core.backend import Backend
-from core.viewer import Viewer 
-from vggt.models.vggt import VGGT
+from datatype.global_map import GlobalMap
+from core.estimator import Estimator
+from core.feature_tracker import FeatureTracker
 
 def main():
     # 1. 配置参数解析
-    parser = argparse.ArgumentParser(description="iVGGT-SLAM: Visual-Inertial SLAM System")
+    parser = argparse.ArgumentParser(description="PyVINS-Fusion: Visual-Inertial SLAM System For Python")
 
     # 配置文件路径
     parser.add_argument('--config', type=Path, default='config/config.yaml',
@@ -46,34 +42,25 @@ def main():
     global_central_map = GlobalMap()
 
     # 创建队列
-    frontend_to_system_queue = queue.Queue(maxsize=5) # 前端传递给系统VGGT推理数据和IMU预积分数据，线程之间传递
-    system_to_viewer_queue = mp.Queue(maxsize=5) # system传递给viewer对齐的全局地图数据，进程之间传递，实际上可以传递global_map地址指针
-
-    # 加载模型
-    checkpoint_path = "./model/model.pt"
+    feature_tracker_to_estimator_queue = queue.Queue(maxsize=5) # 前端传递给系统VGGT推理数据和IMU预积分数据，线程之间传递
 
     # 初始化数据加载器
     dataloader_config = {'path': config['dataset_path'], 'dataset_type': config['dataset_type']}
     data_loader = UnifiedDataloader(dataloader_config)
 
-    # 初始化imu处理模块
-    imu_processor = IMUProcessor(config)
-
     # 实例化所有模块
     # viewer = Viewer(system_to_viewer_queue)
-    frontend = Frontend(checkpoint_path, config, data_loader, imu_processor, frontend_to_system_queue)
-    backend = Backend(global_central_map, config, imu_processor)
-    system = IVGGTSystem(config, frontend_to_system_queue, system_to_viewer_queue,
-                        global_central_map, imu_processor, backend)
+    feature_tracker = FeatureTracker(config, data_loader, feature_tracker_to_estimator_queue)
+    # estimator = IVGGTSystem(config, frontend_to_system_queue, system_to_viewer_queue,
+    #                     global_central_map, imu_processor, backend)
     
     # 建立连接
     # system.set_viewer(viewer)
     
     # 3. 启动所有线程
     print("Starting all SLAM threads...")
-    backend.start()
-    system.start()
-    frontend.start()
+    feature_tracker.start()
+    # estimator.start()
     # viewer.start()
 
     # 4. 主线程等待所有子线程结束
@@ -81,7 +68,7 @@ def main():
         # 使用一个无限循环让主线程保持存活
         while True:
             # 关闭可视化窗口则退出进程
-            if not frontend.thread.is_alive() and not system.thread.is_alive():
+            if not feature_tracker.thread.is_alive():
                 print("[Main Process] All processing threads have finished. Initiating shutdown.")
                 break
             time.sleep(1)
@@ -92,21 +79,19 @@ def main():
         print("[Main Process] Shutting down all components...")
         
         # a. 首先，向所有子任务发送停止信号
-        backend.stop()
-        frontend.shutdown()
-        system.shutdown()
+        feature_tracker.shutdown()
+        # estimator.shutdown()
         # viewer.shutdown()
 
         # b. 然后，等待所有子任务真正执行完毕并退出
         # 等待线程
-        backend.join(timeout=2)
-        frontend.thread.join(timeout=2)
-        system.thread.join(timeout=2)
+        feature_tracker.thread.join(timeout=2)
+        # estimator.thread.join(timeout=2)
         # 等待进程
         # viewer.join(timeout=2)
 
         cv2.destroyAllWindows()
-        print("[Main Process] SLAM system shut down gracefully.")
+        print("[Main Process] SLAM system shut down.")
 
 if __name__ == "__main__":
     main()

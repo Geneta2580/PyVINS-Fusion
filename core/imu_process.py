@@ -28,7 +28,8 @@ class IMUProcessor:
 
         self.current_bias = gtsam.imuBias.ConstantBias()
 
-    def get_imu_interval_with_interpolation(self, imu_buffer_deque: deque, end_time: float) -> Tuple[List[ImuData], deque]:
+    @staticmethod
+    def get_imu_interval_with_interpolation(imu_buffer_deque: deque, end_time: float) -> Tuple[List[ImuData], deque]:
         measurements_to_process = []
 
         while len(imu_buffer_deque) > 0 and imu_buffer_deque[0][0] <= end_time:

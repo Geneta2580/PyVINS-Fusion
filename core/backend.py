@@ -1,17 +1,13 @@
-import threading
 import queue
 import numpy as np
 import gtsam
 from gtsam.symbol_shorthand import X, V, B
 
-class Backend(threading.Thread):
+class Backend:
     def __init__(self, global_central_map, config, imu_processor):
-        super().__init__()
-        self.daemon = True
         self.global_central_map = global_central_map
         self.config = config
         self.imu_processor = imu_processor
-        self.stop_event = threading.Event()
 
         # 传递submap和imu预积分因子的队列
         self.measurement_queue = queue.Queue()

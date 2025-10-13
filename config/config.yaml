@@ -9,11 +9,12 @@ dataset_path: "/home/pangjunxiang/dataset/Euroc/MH_01_easy"
 # 支持euroc和tum数据集
 dataset_type: "euroc"
 
-max_loops: 10
-
 # 视觉前端配置参数
-# 点云滤除的置信度阈值
-confidence_threshold: 0.9
+# 选择关键帧最小视差
+min_parallax: 10
+
+# 是否可视化追踪结果
+visualize: False
 
 # 使用GPU的ID
 gpu_id: 4
