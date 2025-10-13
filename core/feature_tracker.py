@@ -51,7 +51,7 @@ class FeatureTracker(threading.Thread):
 
                 if data:
                     imu_measurements = {
-                        'measurements': data,
+                        'imu_measurements': data,
                         'timestamp': timestamp,
                     }
                 try:
@@ -76,7 +76,7 @@ class FeatureTracker(threading.Thread):
                 if is_kf:
                     # 处理关键帧
                     visual_features = {
-                        'features': undistorted_features,
+                        'visual_features': undistorted_features,
                         'feature_ids': feature_ids,
                         'timestamp': timestamp,
                     }
