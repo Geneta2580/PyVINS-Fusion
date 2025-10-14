@@ -6,7 +6,6 @@ import queue
 import time
 import multiprocessing as mp
 
-import torch
 import cv2
 
 from utils.dataloader import UnifiedDataloader

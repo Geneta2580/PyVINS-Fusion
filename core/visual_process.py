@@ -2,11 +2,6 @@ import cv2
 import numpy as np
 import time
 
-from vggt.models.vggt import VGGT
-from vggt.utils.geometry import closed_form_inverse_se3, unproject_depth_map_to_point_map
-from vggt.utils.load_fn import load_and_preprocess_images
-from vggt.utils.pose_enc import pose_encoding_to_extri_intri
-
 class VisualProcessor:
     def __init__(self, config):
         # 前端切换关键帧参数

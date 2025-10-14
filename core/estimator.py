@@ -21,6 +21,7 @@ class Estimator(threading.Thread):
         self.config = config
         self.input_queue = input_queue
         self.global_map = global_central_map
+        self.keyframes = {}
 
         self.imu_processor = IMUProcessor(config)
         self.imu_buffer = []

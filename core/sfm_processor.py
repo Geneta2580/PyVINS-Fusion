@@ -58,17 +58,17 @@ class SfMProcessor:
         proj_mat1 = self.cam_intrinsics @ pose1[:3, :]
         proj_mat2 = self.cam_intrinsics @ pose2[:3, :]
 
-        points4d_homo = cv2.triangulatePoints(proj_mat1, proj_mat2, pts1.T, pts2.T)
-        points3d = (points4d_homo[:3] / points4d_homo[3]).T
+        points4d_homo = cv2.triangulatePoints(proj_mat1, proj_mat2, pts1.T, pts2.T)  # 4xN
+        points3d = points4d_homo[:3] / points4d_homo[3]
 
         # 检查在两个相机下深度都为正
-        positive_depth_mask = points3d[:, 2] > 0
+        positive_depth_mask = points3d[2, :] > 0
 
-        points_cam2 = (R.T @ (points3d - t.T)).T
+        points_cam2 = (R.T @ (points3d - t)).T # 3xN->Nx3
         positive_depth_mask2 = points_cam2[:, 2] > 0
 
         final_mask = positive_depth_mask & positive_depth_mask2
-        final_points3d = points3d[final_mask]
+        final_points3d = points3d[:, final_mask].T # 3xN->Nx3
 
         return final_points3d, final_mask
 
