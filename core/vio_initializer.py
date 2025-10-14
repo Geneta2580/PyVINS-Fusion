@@ -3,7 +3,7 @@ import numpy as np
 import gtsam
 from gtsam.symbol_shorthand import X, V, B
 from scipy.spatial.transform import Rotation
-from utils.geometry import calculate_preintegration_and_jacobian, caculate_rotation_matrix_from_two_vectors, pose_matrix_to_tum_format
+from utils.geometry import calculate_preintegration_and_jacobian, pose_matrix_to_tum_format
 from .imu_process import IMUProcessor
 from utils.debug import Debugger
 
@@ -19,7 +19,7 @@ class VIOInitializer:
         for factor_info in imu_factors:
             start_ts = factor_info['start_kf_timestamp']
             end_ts = factor_info['end_kf_timestamp']
-            raw_measurements = factor_info['measurements']
+            raw_measurements = factor_info['imu_measurements']
 
             # 获取对应视觉KF
             kf_start = next((kf for kf in keyframes if kf.get_timestamp() == start_ts), None)
@@ -58,7 +58,7 @@ class VIOInitializer:
 
         for factor_info in imu_factors:
             repropagated_result = imu_processor.pre_integration(
-                factor_info['measurements'],
+                factor_info['imu_measurements'],
                 factor_info['start_kf_timestamp'],
                 factor_info['end_kf_timestamp'],
                 override_bias = new_bias
@@ -352,7 +352,6 @@ class VIOInitializer:
             print("【System Init】: Failed to solve gyro bias")
             return False, None, None, None, None
 
-        # bg0 = np.array([0.00362679, 0.0231133, 0.0789586])
         repropagated_imu_factors = VIOInitializer.repropagate_imu(imu_factors, imu_processor, bg0) # 这里执行了重传播，原地修改imu_factors
         if not repropagated_imu_factors:
             print("【System Init】: Repropagation failed.")

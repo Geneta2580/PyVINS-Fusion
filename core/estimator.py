@@ -1,5 +1,7 @@
 from collections import deque
 from ctypes import alignment
+from re import S
+from tkinter import N
 import gtsam
 import cv2
 import numpy as np
@@ -108,7 +110,35 @@ class Estimator(threading.Thread):
         
         print("【Estimator】thread has finished.")
 
+    def create_imu_factors(self, kf_start, kf_end):
+        start_ts = kf_start.get_timestamp()
+        end_ts = kf_end.get_timestamp()
+
+        # 获取IMU量测数据
+        measurements_with_ts = [
+            (pkg['timestamp'], pkg['imu_measurements']) for pkg in self.imu_buffer
+            if start_ts < pkg['timestamp'] <= end_ts
+        ]
+
+        if not measurements_with_ts:
+            print(f"【Estimator】: No IMU measurements between KF {kf_start.get_id()} and KF {kf_end.get_id()}.")
+            return None
+
+        imu_preintegration = self.imu_processor.pre_integration(measurements_with_ts, start_ts, end_ts)
+
+        if imu_preintegration:
+            return {
+                'start_kf_timestamp': start_ts,
+                'end_kf_timestamp': end_ts,
+                'imu_measurements': measurements_with_ts,
+                'imu_preintegration': imu_preintegration
+            }
+
+        return None
         
+    # def check_motion_excitement(self):
+
+
     def visual_inertial_initialization(self):
         print("【Init】: Buffer is full. Starting initialization process.")
 
@@ -120,7 +150,24 @@ class Estimator(threading.Thread):
             print("【Init】: Visual initialization failed. Sliding window.")
             return
 
-        alignment_success = True
+        # 创建初始化IMU因子
+        initial_imu_factors = []
+        for i in range(len(initial_keyframes) - 1):
+            kf_start = initial_keyframes[i]
+            kf_end = initial_keyframes[i + 1]
+            imu_factors = self.create_imu_factors(kf_start, kf_end)
+            if imu_factors:
+                initial_imu_factors.append(imu_factors)
+
+        # 视觉惯性初始化
+        alignment_success, scale, gyro_bias, velocities, gravity_w = VIOInitializer.initialize(
+            initial_keyframes, 
+            initial_imu_factors, 
+            self.imu_processor, 
+            self.gravity_magnitude, 
+            self.T_bc
+        )
+
         if alignment_success:
             print("【Init】: System initialized successfully.")
             self.is_initialized = True
@@ -153,65 +200,78 @@ class Estimator(threading.Thread):
 
         return sfm_success
     
-    
     def visual_initialization(self, initial_keyframes):
         print("【Visual Init】: Searching for the best keyframe pair...")
-        curr_kf = initial_keyframes[-1]  # 最新KF
-        ref_kf = None # 参考最优KF
+        ref_kf = initial_keyframes[0]
+        ref_kf.set_global_pose(np.eye(4))
+
+        curr_kf = None
 
         R, t, inlier_ids, pts1_inliers, pts2_inliers = [None] * 5
 
         # 从最新的KF开始，向前找到最优的KF对
-        for i in range(len(initial_keyframes) - 2, -1, -1):
-            potential_ref_kf = initial_keyframes[i]
+        for i in range(1, len(initial_keyframes)):
+            potential_curr_kf = initial_keyframes[i]
 
             success, ids_cand, p1_cand, p2_cand, R_cand, t_cand = \
-            self.sfm_processor.epipolar_compute(potential_ref_kf, curr_kf)
+            self.sfm_processor.epipolar_compute(ref_kf, potential_curr_kf)
 
-            if success:
-                ref_kf = potential_ref_kf
-                R, t, inlier_ids, pts1_inliers, pts2_inliers = R_cand, t_cand, ids_cand, p1_cand, p2_cand
-                
-                print(f"【Visual Init】: Found a good pair! (KF {ref_kf.get_id()}, KF {curr_kf.get_id()}).")
+            if not success:
+                continue
 
-                # 三角化最优KF对的特征点
-                points_3d, mask = self.sfm_processor.triangulate_points(pts1_inliers, pts2_inliers, R, t)
-                if len(points_3d) < 30:
-                    print(f"【Visual Init】: Triangulation resulted in too few valid points ({len(points_3d)}).")
-                    continue
+            parallax = np.median(np.linalg.norm(p1_cand - p2_cand, axis=1))
 
-                # 最终的内点id
-                valid_ids = np.array(inlier_ids)[mask]        
-                
-                # 加入地图
-                for landmark_id, landmark_pt in zip(valid_ids, points_3d):
-                    self.landmarks[landmark_id] = landmark_pt
-                
-                # 设置参考KF的位姿为原点
-                ref_kf.set_global_pose(np.eye(4))
+            if np.mean(parallax) > 40:
+                print(f"【Visual Init】: Found a good pair! (KF {ref_kf.get_id()}, KF {potential_curr_kf.get_id()}) "
+                      f"with parallax {parallax:.2f} px.")
 
-                T_curr_ref = np.eye(4)
-                T_curr_ref[:3, :3] = R
-                T_curr_ref[:3, 3] = t.ravel()
-                T_ref_curr = np.linalg.inv(T_curr_ref)
-                curr_kf.set_global_pose(T_ref_curr)
+                curr_kf = potential_curr_kf
+                R_best, t_best = R_cand, t_cand
+                ids_best, p1_best, p2_best = ids_cand, p1_cand, p2_cand
+                break
+            else:
+                print(f"  - Pair (KF {ref_kf.get_id()}, KF {potential_curr_kf.get_id()}) has insufficient parallax ({parallax:.2f} px).")
 
-                # 使用PnP计算其他KF位姿
-                for kf in initial_keyframes:
-                    # 跳过参考KF和最新KF
-                    if kf.get_id() in [ref_kf.get_id(), curr_kf.get_id()]:
-                        continue
+        if curr_kf is None:
+            print("【Visual Init】: Failed to find a suitable pair in this window.")
+            return False   
 
-                    success_pnp, pose = self.sfm_processor.track_with_pnp(self.landmarks, kf)
-                    if success_pnp:
-                        kf.set_global_pose(pose)
+        # 三角化最优KF对的特征点
+        points_3d, mask = self.sfm_processor.triangulate_points(p1_best, p2_best, R_best, t_best)
 
-                print(f"【Visual Init】: Success! Map has {len(self.landmarks)} landmarks.")
-                return True
+        if len(points_3d) < 30:
+            print(f"【Visual Init】: Triangulation resulted in too few valid points ({len(points_3d)}).")
+            return False
 
-        print("【Visual Init】: Failed to initialize in this window.")
-        return False
+        # 最终的内点id
+        valid_ids = np.array(ids_best)[mask]
 
+        # 加入地图
+        self.landmarks.clear()
+        for landmark_id, landmark_pt in zip(valid_ids, points_3d):
+            self.landmarks[landmark_id] = landmark_pt
+
+        # 设置curr_kf的位姿
+        T_curr_ref = np.eye(4)
+        T_curr_ref[:3, :3] = R_best
+        T_curr_ref[:3, 3] = t_best.ravel()
+        T_ref_curr = np.linalg.inv(T_curr_ref)
+        curr_kf.set_global_pose(T_ref_curr)
+
+        # 使用PnP计算其他KF位姿
+        for kf in initial_keyframes:
+            # 跳过参考KF和最新KF
+            if kf.get_id() in [ref_kf.get_id(), curr_kf.get_id()]:
+                continue
+
+            success_pnp, pose = self.sfm_processor.track_with_pnp(self.landmarks, kf)
+            # print(f"pose: {pose}")
+            if success_pnp:
+                kf.set_global_pose(pose)
+
+        print(f"【Visual Init】: Success! Map has {len(self.landmarks)} landmarks.")
+        
+        return True
 
     def process_package_data(self, new_kf):
         if len(self.keyframe_window) < 2:
