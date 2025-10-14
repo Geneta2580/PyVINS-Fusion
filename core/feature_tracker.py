@@ -79,6 +79,7 @@ class FeatureTracker(threading.Thread):
                         'visual_features': undistorted_features,
                         'feature_ids': feature_ids,
                         'timestamp': timestamp,
+                        'image': image_data,
                     }
                     self.last_kf_timestamp = timestamp
                     try:

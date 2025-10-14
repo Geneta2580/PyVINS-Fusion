@@ -29,35 +29,17 @@ class IMUProcessor:
         self.current_bias = gtsam.imuBias.ConstantBias()
 
     @staticmethod
-    def get_imu_interval_with_interpolation(imu_buffer_deque: deque, end_time: float) -> Tuple[List[ImuData], deque]:
+    def get_imu_interval_with(imu_buffer_deque: deque, end_time: float) -> Tuple[List[ImuData], deque]:
         measurements_to_process = []
 
         while len(imu_buffer_deque) > 0 and imu_buffer_deque[0][0] <= end_time:
             # 添加到IMU测量列表，同时从缓冲区中删除这些数据
             measurements_to_process.append(imu_buffer_deque.popleft()) 
 
-        # 提取一个额外的IMU数据，用于插值
-        if len(imu_buffer_deque) > 0:
-            measurements_to_process.append(imu_buffer_deque.popleft())
-
         return measurements_to_process, imu_buffer_deque
 
     def update_bias(self, new_bias):
         self.current_bias = new_bias
-
-    def imu_interpolation(self, meas_before: ImuData, meas_after: ImuData, target_ts: float):
-        ts_before, data_before = meas_before
-        ts_after, data_after = meas_after
-
-        if ts_after == ts_before:
-            return data_before.accel, data_before.gyro
-
-        # 按时间比例线性插值，同步到图像帧时间
-        ratio = (target_ts - ts_before) / (ts_after - ts_before)
-        interp_accel = data_before.accel + (data_after.accel - data_before.accel) * ratio
-        interp_gyro = data_before.gyro + (data_after.gyro - data_before.gyro) * ratio
-        
-        return interp_accel, interp_gyro
 
     def fast_integration(self, imu_data):
         return None
@@ -78,24 +60,25 @@ class IMUProcessor:
 
         preintegrated_measurements = gtsam.PreintegratedCombinedMeasurements(self.params, current_bias)
 
-        # 最后一个IMU数据用于插值，同时将最后一个IMU数据从列表中移除
-        interpolation_point = measurements.pop()
-        # 修改后的最后一个IMU数据，用于插值
-        last_integrated_point = measurements[-1]
-
-        # 积分IMU数据
+        # 逐段积分IMU数据
         last_timestamp = start_time
-        for ts, data in measurements:
-            dt = ts - last_timestamp # 注意这里的单位应该是s
-            # print(f"【IMU_process】dt: {dt}")
-            if dt > 0:
-                preintegrated_measurements.integrateMeasurement(data.accel, data.gyro, dt)
-            last_timestamp = ts
+        for imu_data in measurements:
+            timestamp, data = imu_data
 
-        if end_time > last_timestamp:
-            # 对最后一个IMU数据进行插值并积分
-            interp_accel, interp_gyro = self.imu_interpolation(last_integrated_point, interpolation_point, end_time)
-            dt =  end_time - last_timestamp
-            preintegrated_measurements.integrateMeasurement(interp_accel, interp_gyro, dt)
+            if timestamp > last_timestamp:
+                dt = timestamp - last_timestamp # 注意这里的单位应该是s
+                if dt <=0:
+                    continue
+
+                preintegrated_measurements.integrateMeasurement(data.accel, data.gyro, dt)
+
+                last_timestamp = timestamp
+
+        # 对最后一段IMU进行积分
+        final_dt = end_time - last_timestamp
+        if final_dt > 0:
+            last_accel = measurements[-1][1].accel
+            last_gyro = measurements[-1][1].gyro
+            preintegrated_measurements.integrateMeasurement(last_accel, last_gyro, final_dt)
 
         return preintegrated_measurements

@@ -12,6 +12,7 @@ from utils.dataloader import UnifiedDataloader
 from datatype.global_map import GlobalMap
 from core.estimator import Estimator
 from core.feature_tracker import FeatureTracker
+from core.viewer import Viewer3D
 
 def main():
     # 1. 配置参数解析
@@ -41,34 +42,30 @@ def main():
     global_central_map = GlobalMap()
 
     # 创建队列
-    feature_tracker_to_estimator_queue = queue.Queue(maxsize=5) # 前端传递给系统VGGT推理数据和IMU预积分数据，线程之间传递
+    feature_tracker_to_estimator_queue = queue.Queue(maxsize=5)
+    estimator_to_viewer_queue = queue.Queue(maxsize=5)
 
     # 初始化数据加载器
     dataloader_config = {'path': config['dataset_path'], 'dataset_type': config['dataset_type']}
     data_loader = UnifiedDataloader(dataloader_config)
 
     # 实例化所有模块
-    # viewer = Viewer(system_to_viewer_queue)
     feature_tracker = FeatureTracker(config, data_loader, feature_tracker_to_estimator_queue)
-    estimator = Estimator(config, feature_tracker_to_estimator_queue, global_central_map)
-    
-    # 建立连接
-    # system.set_viewer(viewer)
+    estimator = Estimator(config, feature_tracker_to_estimator_queue, estimator_to_viewer_queue, global_central_map)
+    viewer = Viewer3D(estimator_to_viewer_queue) if config.get('enable_viewer', True) else None
     
     # 3. 启动所有线程
     print("Starting all SLAM threads...")
     feature_tracker.start()
     estimator.start()
-    # viewer.start()
 
-    # 4. 主线程等待所有子线程结束
+    # 启动viewer线程
+    if viewer:
+        viewer.start()
+
     try:
-        # 使用一个无限循环让主线程保持存活
-        while True:
-            if not feature_tracker.is_alive():
-                print("[Main Process] All processing threads have finished. Initiating shutdown.")
-                break
-            time.sleep(1)
+        feature_tracker.join()
+        estimator.join()
 
     except KeyboardInterrupt:
         print("\n[Main Process] Caught KeyboardInterrupt, initiating shutdown...")
@@ -79,14 +76,12 @@ def main():
         # a. 首先，向所有子任务发送停止信号
         feature_tracker.shutdown()
         estimator.shutdown()
-        # viewer.shutdown()
+        if viewer:
+            viewer.shutdown()
 
-        # b. 然后，等待所有子任务真正执行完毕并退出
-        # 等待线程
-        feature_tracker.join(timeout=2)
-        estimator.join(timeout=2)
-        # 等待进程
-        # viewer.join(timeout=2)
+        if feature_tracker.is_alive(): feature_tracker.join()
+        if estimator.is_alive(): estimator.join()
+        if viewer and viewer.is_alive(): viewer.join()
 
         cv2.destroyAllWindows()
         print("[Main Process] SLAM system shut down.")

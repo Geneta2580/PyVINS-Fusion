@@ -1,7 +1,11 @@
+from collections import deque
+from ctypes import alignment
 import gtsam
+import cv2
 import numpy as np
 import threading
 import queue
+from collections import deque
 
 from .backend import Backend
 from datatype.keyframe import KeyFrame
@@ -16,12 +20,11 @@ class Estimator(threading.Thread):
     """
     The central coordinator for the SLAM system. Runs as a consumer thread.
     """
-    def __init__(self, config, input_queue, global_central_map):
+    def __init__(self, config, input_queue, viewer_queue, global_central_map):
         super().__init__(daemon=True)
         self.config = config
         self.input_queue = input_queue
         self.global_map = global_central_map
-        self.keyframes = {}
 
         self.imu_processor = IMUProcessor(config)
         self.imu_buffer = []
@@ -33,21 +36,23 @@ class Estimator(threading.Thread):
         self.sfm_processor = SfMProcessor(self.cam_intrinsics)
 
         self.next_kf_id = 0
-        self.keyframe_window = {}
+        self.keyframe_window = deque(maxlen=10)
         self.landmarks = {}
 
         # 初始化相关设置
         self.is_initialized = False
-        self.init_kf_buffer = []
-        self.init_imu_factors_buffer = []
+
         self.init_window_size = self.config.get('init_window_size', 10)
 
+        self.gravity_magnitude = self.config.get('gravity', 9.81)
+        T_bc_raw = self.config.get('T_bc', np.eye(4).flatten().tolist())
+        self.T_bc = np.asarray(T_bc_raw).reshape(4, 4)
+
         # 可视化test
-        self.viewer = Viewer3D()
+        self.viewer_queue = viewer_queue
 
         # Threading control
         self.is_running = False
-        self.thread = threading.Thread(target=self.run, daemon=True)
 
     def start(self):
         self.is_running = True
@@ -75,13 +80,28 @@ class Estimator(threading.Thread):
 
                 # 接收视觉特征点数据
                 elif 'visual_features' in package:
-                    print(f"【Estimator】: Received KeyFrame at timestamp {timestamp:.4f}")
+                    timestamp = package['timestamp']
+                    visual_features = package['visual_features']
+                    feature_ids = package['feature_ids']
+                    image = package['image']
+
+                    new_id = self.next_kf_id
+                    new_kf = KeyFrame(new_id, timestamp)
+                    new_kf.add_visual_features(visual_features, feature_ids)
+                    new_kf.set_image(image)
+
+                    self.next_kf_id += 1
+                    self.keyframe_window.append(new_kf)
 
                     if not self.is_initialized:
-                        self.is_initialized = self.visual_inertial_initialization(package)
+                        if len(self.keyframe_window) == self.init_window_size:
+                            self.visual_inertial_initialization()
+                        
+                        else:
+                            print(f"【Init】: Collecting frames... {len(self.keyframe_window)}/{self.init_window_size}")
                     else:
                         pass
-                        # self.process_package_data(package)
+                        # self.process_package_data(new_kf)
 
             except queue.Empty:
                 continue
@@ -89,30 +109,47 @@ class Estimator(threading.Thread):
         print("【Estimator】thread has finished.")
 
         
-    def visual_inertial_initialization(self, kf_package):
-        timestamp = kf_package['timestamp']
-        visual_features = kf_package['visual_features']
-        feature_ids = kf_package['feature_ids']
-
-        new_id = self.next_kf_id
-        new_kf = KeyFrame(new_id, timestamp)
-        new_kf.add_visual_features(visual_features, feature_ids)
-        self.init_kf_buffer.append(new_kf)
-        self.next_kf_id += 1
-
-        if len(self.init_kf_buffer) < self.init_window_size:
-            print(f"【Init】: Collecting frames... {len(self.init_kf_buffer)}/{self.init_window_size}")
-            return
-
+    def visual_inertial_initialization(self):
         print("【Init】: Buffer is full. Starting initialization process.")
 
-        sfm_success = self.visual_initialization(self.init_kf_buffer)
+        initial_keyframes = list(self.keyframe_window)
+        sfm_success = self.visual_initialization(initial_keyframes)
 
-        if sfm_success:
-            if self.viewer:
-                # 收集所有已计算的位姿
-                poses = {kf.get_id(): kf.get_global_pose() for kf in self.keyframes.values() if kf.get_global_pose() is not None}
-                self.viewer.update(self.landmarks, poses)
+        # 视觉初始化失败，滑动窗口继续初始化
+        if not sfm_success:
+            print("【Init】: Visual initialization failed. Sliding window.")
+            return
+
+        alignment_success = True
+        if alignment_success:
+            print("【Init】: System initialized successfully.")
+            self.is_initialized = True
+        else:
+            print("【Init】: V-I Alignment failed.")
+
+        # viewer可视化
+        # if sfm_success:
+        #     self._verify_landmarks_on_images(self.init_kf_buffer, self.landmarks)
+        #     if self.viewer_queue:
+        #         print("【Init】: Sending initialization result to viewer queue...")
+        #         poses = {kf.get_id(): kf.get_global_pose() for kf in self.keyframes.values() if kf.get_global_pose() is not None}
+                
+        #         vis_data = {
+        #             'landmarks': self.landmarks.copy(),
+        #             'poses': poses
+        #         }
+                
+        #         # 使用 try-except 避免队列满时阻塞
+        #         try:
+        #             self.viewer_queue.put_nowait(vis_data)
+        #         except queue.Full:
+        #             print("【Estimator】: Viewer queue is full, skipping this frame.")
+
+        # if sfm_success:
+        #     self.init_kf_buffer.clear() # 初始化成功后清空缓冲区
+        # else:
+        #     self.init_kf_buffer.pop(0) # 失败则滑动窗口
+        # viewer可视化
 
         return sfm_success
     
@@ -159,20 +196,15 @@ class Estimator(threading.Thread):
                 T_ref_curr = np.linalg.inv(T_curr_ref)
                 curr_kf.set_global_pose(T_ref_curr)
 
-                # 加入到全局KF缓存
-                self.keyframes[ref_kf.get_id()] = ref_kf
-                self.keyframes[curr_kf.get_id()] = curr_kf
-
                 # 使用PnP计算其他KF位姿
                 for kf in initial_keyframes:
                     # 跳过参考KF和最新KF
-                    if kf.get_id() == ref_kf.get_id() or kf.get_id() == curr_kf.get_id():
+                    if kf.get_id() in [ref_kf.get_id(), curr_kf.get_id()]:
                         continue
 
                     success_pnp, pose = self.sfm_processor.track_with_pnp(self.landmarks, kf)
                     if success_pnp:
                         kf.set_global_pose(pose)
-                        self.keyframes[kf.get_id()] = kf
 
                 print(f"【Visual Init】: Success! Map has {len(self.landmarks)} landmarks.")
                 return True
@@ -181,25 +213,64 @@ class Estimator(threading.Thread):
         return False
 
 
-    def process_package_data(self, kf_package):
-        timestamp = kf_package['timestamp']
-        visual_features = kf_package['visual_features']
-        feature_ids = kf_package['feature_ids']
-
-        # 创建新KF
-        new_id = self.next_kf_id
-        new_kf = KeyFrame(new_id, timestamp)
-
-        # 第一个KF
-        if not self.keyframe_window:
-            self.keyframe_window[timestamp] = new_id
-            new_kf.add_visual_features(visual_features, feature_ids)
-            self.next_kf_id += 1
+    def process_package_data(self, new_kf):
+        if len(self.keyframe_window) < 2:
             return
 
-        prev_kf_id = max(self.keyframe_window.keys())
-        prev_kf = self.keyframe_window[prev_kf_id]
+        last_kf = self.keyframe_window[-2]
 
-        new_kf.add_visual_features(visual_features, feature_ids)
-        self.keyframe_window[new_id] = new_kf
-        self.next_kf_id += 1
+    
+    # def _verify_landmarks_on_images(self, keyframes, landmarks, num_to_check=5):
+    #     """
+    #     一个调试函数，用于在图像上可视化验证三角化出的地图点。
+    #     """
+    #     if not landmarks:
+    #         print("【Verification】: No landmarks to verify.")
+    #         return
+
+    #     # 随机挑选几个 landmark 来检查
+    #     landmark_ids = list(landmarks.keys())
+    #     selected_ids = np.random.choice(landmark_ids, size=min(num_to_check, len(landmark_ids)), replace=False)
+
+    #     print(f"【Verification】: Checking landmarks with IDs: {selected_ids}")
+
+    #     # 为每个被选中的 landmark 创建一个图像拼接
+    #     for lm_id in selected_ids:
+    #         lm_3d_pos = landmarks[lm_id]
+    #         print(f"  - Verifying Landmark {lm_id} at 3D position {np.round(lm_3d_pos, 2)}")
+            
+    #         observing_images = []
+            
+    #         # 找到所有观测到这个 landmark 的关键帧
+    #         for kf in keyframes:
+    #             # 注意：这里需要 KeyFrame 类有一个 get_feature_ids() 的方法
+    #             kf_fids = kf.get_visual_feature_ids() 
+    #             if lm_id in kf_fids:
+    #                 # 获取图像和2D点坐标
+    #                 img = kf.get_image()
+    #                 if img is None: continue
+
+    #                 vis_img = img.copy()
+                    
+    #                 # 找到对应的2D点
+    #                 idx = np.where(kf_fids == lm_id)[0][0]
+    #                 # 注意：这里需要 KeyFrame 类有一个 get_features() 的方法
+    #                 pt_2d = kf.get_visual_features()[idx] 
+
+    #                 # 在图像上高亮显示
+    #                 pt_int = tuple(pt_2d.astype(int))
+    #                 cv2.circle(vis_img, pt_int, 5, (0, 0, 255), 2) # 红色圆圈
+    #                 cv2.putText(vis_img, f"ID:{lm_id}", (pt_int[0]+10, pt_int[1]-10), 
+    #                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2) # 绿色ID
+                    
+    #                 # 添加到待显示的图像列表
+    #                 observing_images.append(vis_img)
+            
+    #         # 将所有观测到该点的图像拼接起来显示
+    #         if observing_images:
+    #             montage = cv2.hconcat(observing_images)
+    #             cv2.imshow(f"Observations of Landmark ID {lm_id}", montage)
+        
+    #     print("\n【Verification】: Press any key on an image window to continue...")
+    #     cv2.waitKey(0) # 暂停程序，直到用户在图像窗口上按键
+    #     cv2.destroyAllWindows()

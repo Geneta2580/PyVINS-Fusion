@@ -5,6 +5,7 @@ class KeyFrame:
         self.id = kf_id
         self.timestamp = timestamp
 
+        self.image = None
         self.local_pose = None 
         self.global_pose = None
         self.point_cloud = None
@@ -13,6 +14,9 @@ class KeyFrame:
         self.visual_feature_ids = None
 
     # 写入类信息(write)
+    def set_image(self, image):
+        self.image = image
+
     def add_visual_features(self, visual_features, feature_ids):
         self.visual_features = visual_features
         self.visual_feature_ids = feature_ids
@@ -33,6 +37,9 @@ class KeyFrame:
 
     def get_timestamp(self):
         return self.timestamp
+
+    def get_image(self):
+        return self.image
 
     def get_local_pose(self):
         return self.local_pose

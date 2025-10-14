@@ -26,8 +26,11 @@ class VIOInitializer:
             kf_end = next((kf for kf in keyframes if kf.get_timestamp() == end_ts), None)
 
             if kf_start and kf_end:
-                R_i_vis = gtsam.Rot3(kf_start.get_global_pose()[:3, :3] * np.linalg.inv(T_bc[:3, :3])) # 注意此时的global_pose是T_c0_ci
-                R_j_vis = gtsam.Rot3(kf_end.get_global_pose()[:3, :3] * np.linalg.inv(T_bc[:3, :3]))
+                T_b0_bi_start = kf_start.get_global_pose() @ np.linalg.inv(T_bc)
+                T_b0_bi_end = kf_end.get_global_pose() @ np.linalg.inv(T_bc)
+
+                R_i_vis = gtsam.Rot3(T_b0_bi_start[:3, :3])
+                R_j_vis = gtsam.Rot3(T_b0_bi_end[:3, :3])
                 
                 delta_R_mat, _, _, J_R_bg = calculate_preintegration_and_jacobian(
                     raw_measurements, start_ts, initial_gyro_bias
