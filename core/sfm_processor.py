@@ -51,26 +51,42 @@ class SfMProcessor:
     def triangulate_points(self, pts1, pts2, R, t):
         pose1 = np.eye(4)
         pose2 = np.eye(4)
-
         pose2[:3, :3] = R
         pose2[:3, 3] = t.ravel()
 
         proj_mat1 = self.cam_intrinsics @ pose1[:3, :]
         proj_mat2 = self.cam_intrinsics @ pose2[:3, :]
 
-        points4d_homo = cv2.triangulatePoints(proj_mat1, proj_mat2, pts1.T, pts2.T)  # 4xN
-        points3d = points4d_homo[:3] / points4d_homo[3]
+        points4d_homo = cv2.triangulatePoints(proj_mat1, proj_mat2, pts1.T, pts2.T) # 4xN
 
-        # 检查在两个相机下深度都为正
-        positive_depth_mask = points3d[2, :] > 0
+        # 第一次筛选：找到所有 w > 1e-4 的有限点
+        finite_mask = points4d_homo[3, :] > 1e-4        
+        final_mask_for_caller = finite_mask # mask长度为N，与输入等长
+        
+        # 应用第一次筛选
+        points4d_finite = points4d_homo[:, finite_mask] # 4xM
+        if points4d_finite.shape[1] == 0:
+            return np.array([]), np.zeros_like(finite_mask, dtype=bool)
 
-        points_cam2 = (R.T @ (points3d - t)).T # 3xN->Nx3
-        positive_depth_mask2 = points_cam2[:, 2] > 0
+        points3d_finite = points4d_finite[:3] / points4d_finite[3] # 3xM
 
-        final_mask = positive_depth_mask & positive_depth_mask2
-        final_points3d = points3d[:, final_mask].T # 3xN->Nx3
+        # 第一张图深度检查
+        positive_depth_mask1 = points3d_finite[2, :] > 0
 
-        return final_points3d, final_mask
+        # 第二张图深度检查
+        points_in_cam2 = (R.T @ (points3d_finite - t))
+        positive_depth_mask2 = points_in_cam2[2, :] > 0
+        
+        cheirality_mask = positive_depth_mask1 & positive_depth_mask2 # 长度为M
+
+        # 4. 生成最终的3D点
+        final_points3d = points3d_finite[:, cheirality_mask].T # 形状(K, 3)
+
+        # 5. 更新最终的输出掩码，使其长度为N
+        #    只有在 finite_mask 中为True的位置，才可能被cheirality_mask进一步筛选
+        final_mask_for_caller[finite_mask] = cheirality_mask
+        
+        return final_points3d, final_mask_for_caller
 
     def track_with_pnp(self, landmarks, new_keyframe):
         object_points, image_points = [], []

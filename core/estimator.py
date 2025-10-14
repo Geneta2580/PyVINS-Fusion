@@ -31,6 +31,8 @@ class Estimator(threading.Thread):
         self.imu_processor = IMUProcessor(config)
         self.imu_buffer = []
 
+        self.backend = Backend(global_central_map, config, self.imu_processor)
+
         # 读取相机内参
         cam_intrinsics_raw = self.config.get('cam_intrinsics', np.eye(3).flatten().tolist())
         self.cam_intrinsics = np.asarray(cam_intrinsics_raw).reshape(3, 3)
@@ -143,7 +145,8 @@ class Estimator(threading.Thread):
         print("【Init】: Buffer is full. Starting initialization process.")
 
         initial_keyframes = list(self.keyframe_window)
-        sfm_success = self.visual_initialization(initial_keyframes)
+        sfm_success, ref_kf, curr_kf, ids_best, p1_best, p2_best = \
+            self.visual_initialization(initial_keyframes)
 
         # 视觉初始化失败，滑动窗口继续初始化
         if not sfm_success:
@@ -169,7 +172,36 @@ class Estimator(threading.Thread):
         )
 
         if alignment_success:
-            print("【Init】: System initialized successfully.")
+            # 获取最终的位姿T_wc
+            final_pose_ref = ref_kf.get_global_pose()
+            final_pose_curr = curr_kf.get_global_pose()
+
+            # 获取具有尺度的T_curr_ref
+            final_T_curr_ref = np.linalg.inv(final_pose_curr) @ final_pose_ref
+            final_R, final_t = final_T_curr_ref[:3, :3], final_T_curr_ref[:3, 3].reshape(3, 1)
+
+            # 恢复具有尺度的3d landmark，相对于ref_kf的坐标
+            final_points_3d_in_ref_frame, final_mask = self.sfm_processor.triangulate_points(p1_best, p2_best, final_R, final_t)
+
+            # 转换到世界坐标系
+            points_3d_world = (final_pose_ref[:3, :3] @ final_points_3d_in_ref_frame.T + final_pose_ref[:3, 3].reshape(3, 1)).T
+
+            # 加入地图
+            valid_ids = np.array(ids_best)[final_mask]
+            self.landmarks.clear()
+            for landmark_id, landmark_pt in zip(valid_ids, points_3d_world):
+                self.landmarks[landmark_id] = landmark_pt
+
+            print(f"【Init】: Re-triangulation complete. Final map has {len(self.landmarks)} landmarks.")
+            print("【Init】: Alignment successful. Calling backend to build initial graph...")
+
+            # 更新IMU偏置
+            initial_bias_obj = gtsam.imuBias.ConstantBias(np.zeros(3), gyro_bias)
+            self.imu_processor.update_bias(initial_bias_obj)
+            
+            # 进行初始优化
+            self.backend.optimize(initial_keyframes, initial_imu_factors, self.landmarks, velocities, initial_bias_obj)
+
             self.is_initialized = True
         else:
             print("【Init】: V-I Alignment failed.")
@@ -221,7 +253,7 @@ class Estimator(threading.Thread):
 
             parallax = np.median(np.linalg.norm(p1_cand - p2_cand, axis=1))
 
-            if np.mean(parallax) > 40:
+            if parallax > 40:
                 print(f"【Visual Init】: Found a good pair! (KF {ref_kf.get_id()}, KF {potential_curr_kf.get_id()}) "
                       f"with parallax {parallax:.2f} px.")
 
@@ -234,14 +266,14 @@ class Estimator(threading.Thread):
 
         if curr_kf is None:
             print("【Visual Init】: Failed to find a suitable pair in this window.")
-            return False   
+            return False, None, None, None, None, None   
 
         # 三角化最优KF对的特征点
         points_3d, mask = self.sfm_processor.triangulate_points(p1_best, p2_best, R_best, t_best)
 
         if len(points_3d) < 30:
             print(f"【Visual Init】: Triangulation resulted in too few valid points ({len(points_3d)}).")
-            return False
+            return False, None, None, None, None, None
 
         # 最终的内点id
         valid_ids = np.array(ids_best)[mask]
@@ -271,7 +303,7 @@ class Estimator(threading.Thread):
 
         print(f"【Visual Init】: Success! Map has {len(self.landmarks)} landmarks.")
         
-        return True
+        return True, ref_kf, curr_kf, ids_best, p1_best, p2_best
 
     def process_package_data(self, new_kf):
         if len(self.keyframe_window) < 2:
@@ -279,7 +311,11 @@ class Estimator(threading.Thread):
 
         last_kf = self.keyframe_window[-2]
 
-    
+        imu_factor_data = self.create_imu_factors(last_kf, new_kf)
+        if not imu_factor_data:
+            print(f"【Estimator】: No IMU factors between KF {last_kf.get_id()} and KF {new_kf.get_id()}.")
+            return
+
     # def _verify_landmarks_on_images(self, keyframes, landmarks, num_to_check=5):
     #     """
     #     一个调试函数，用于在图像上可视化验证三角化出的地图点。
