@@ -41,7 +41,7 @@ class SfMProcessor:
             print("【VO】: Failed to recover pose")
             return False, None, None, None, None, None
 
-        # 过滤并返回内点信息
+        # 过滤并返回内点信息，这里过滤的不能过于严格
         inlier_ids = np.array(common_ids)[inlier_mask.ravel().astype(bool)]
         pts1_inliers = pts1[inlier_mask.ravel().astype(bool)]
         pts2_inliers = pts2[inlier_mask.ravel().astype(bool)]
@@ -144,6 +144,4 @@ class SfMProcessor:
         reprojection_mask = (error1 < threshold) & (error2 < threshold)
         filtered_points_3d = points_3d[reprojection_mask]
         
-        return filtered_points_3d, reprojection_mask
-
-            
+        return filtered_points_3d, reprojection_mask    

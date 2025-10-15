@@ -7,8 +7,6 @@ def pose_matrix_to_tum_format(pose_matrix):
     q = Rotation.from_matrix(pose_matrix[:3, :3]).as_quat() # q is [x, y, z, w]
     return t[0], t[1], t[2], q[0], q[1], q[2], q[3]
 
-
-
 # 仅用于初始化计算预积分相对零偏的雅可比函数
 def calculate_preintegration_and_jacobian(measurements, start_time, initial_bias_gyro):
     if not measurements:

@@ -42,6 +42,7 @@ class Estimator(threading.Thread):
         self.next_kf_id = 0
         self.keyframe_window = deque(maxlen=10)
         self.landmarks = {}
+        self.candidate_features = {} # 存储未被注册到地图的候选新特征点
 
         # 初始化相关设置
         self.is_initialized = False
@@ -104,8 +105,8 @@ class Estimator(threading.Thread):
                         else:
                             print(f"【Init】: Collecting frames... {len(self.keyframe_window)}/{self.init_window_size}")
                     else:
-                        pass
-                        # self.process_package_data(new_kf)
+                        # pass
+                        self.process_package_data(new_kf)
 
             except queue.Empty:
                 continue
@@ -140,7 +141,71 @@ class Estimator(threading.Thread):
         
     # TODO:def check_motion_excitement(self):
 
+    def triangulate_new_landmarks(self, new_kf):
+        newly_triangulated_landmarks = {}
 
+        # new_kf的所有特征点和id
+        new_kf_feature_map = {fid: feat for fid, feat in zip(new_kf.get_visual_feature_ids(), new_kf.get_visual_features())}
+
+        for fid, pt_2d in new_kf_feature_map.items():
+            # 如果特征点未被注册到地图，是新的特征点
+            if fid not in self.landmarks:
+                if fid not in self.candidate_features:
+                    self.candidate_features[fid] = []
+                
+                self.candidate_features[fid].append({'kf_id': new_kf.get_id(), 'pt_2d': pt_2d})
+
+        # 遍历候选特征点，尝试将其注册到地图
+        ids_to_promote = []
+        for fid, observation in self.candidate_features.items():
+            # 至少3个观测才能三角化
+            if len(observation) < 3:
+                continue
+            
+            # 获取第一个和最后一个观测
+            first_obs = observation[0]
+            last_obs = observation[-1]
+
+            # 获取持有观测的第一个和最后一个KF
+            first_kf = self.keyframe_window[first_obs['kf_id']]
+            last_kf = new_kf
+
+            if first_kf is None or last_kf is None:
+                continue
+
+            # 检查视差
+            parallax = np.linalg.norm(first_obs['pt_2d'] - last_obs['pt_2d'])
+            median_parallax = np.median(parallax)
+
+            # 视差足够则进行三角化
+            if median_parallax > 50:
+
+                pose1 = first_kf.get_global_pose()
+                pose2 = last_kf.get_global_pose()
+            
+                if pose1 is None or pose2 is None:
+                    continue
+
+                T_2_1 = np.linalg.inv(pose2) @ pose1
+
+                R, t = T_2_1[:3, :3], T_2_1[:3, 3].reshape(3, 1)
+
+                pts1 = np.array([first_obs['pt_2d']])
+                pts2 = np.array([last_obs['pt_2d']])
+
+                points_3d_in_c1, mask = self.sfm_processor.triangulate_points(pts1, pts2, R, t)
+
+                if len(points_3d_in_c1) > 0:
+                    point_3d_world = (pose1[:3, :3] @ points_3d_in_c1[0].T + pose1[:3, 3]).T
+                    newly_triangulated_landmarks[fid] = point_3d_world
+                    ids_to_promote.append(fid)
+        
+        # 将已晋升的候选点从列表中移除
+        for fid in ids_to_promote:
+            del self.candidate_features[fid]
+
+        return newly_triangulated_landmarks
+            
     def visual_inertial_initialization(self):
         print("【Init】: Buffer is full. Starting initialization process.")
 
@@ -201,10 +266,11 @@ class Estimator(threading.Thread):
             self.imu_processor.update_bias(initial_bias_obj)
             
             # 进行初始优化
-            self.backend.optimize(initial_keyframes, initial_imu_factors, self.landmarks, velocities, initial_bias_obj)
+            self.backend.initialize_optimize(initial_keyframes, initial_imu_factors, self.landmarks, velocities, initial_bias_obj)
 
             self.is_initialized = True
 
+            # viewer可视化
             if self.viewer_queue:
                 print("【Init】: Sending initialization result to viewer queue...")
 
@@ -220,32 +286,10 @@ class Estimator(threading.Thread):
                     self.viewer_queue.put_nowait(vis_data)
                 except queue.Full:
                     print("【Estimator】: Viewer queue is full, skipping this frame.")
+            # viewer可视化
+            
         else:
             print("【Init】: V-I Alignment failed.")
-
-        # viewer可视化
-        # if sfm_success:
-        #     self._verify_landmarks_on_images(self.init_kf_buffer, self.landmarks)
-        #     if self.viewer_queue:
-        #         print("【Init】: Sending initialization result to viewer queue...")
-        #         poses = {kf.get_id(): kf.get_global_pose() for kf in self.keyframes.values() if kf.get_global_pose() is not None}
-                
-        #         vis_data = {
-        #             'landmarks': self.landmarks.copy(),
-        #             'poses': poses
-        #         }
-                
-        #         # 使用 try-except 避免队列满时阻塞
-        #         try:
-        #             self.viewer_queue.put_nowait(vis_data)
-        #         except queue.Full:
-        #             print("【Estimator】: Viewer queue is full, skipping this frame.")
-
-        # if sfm_success:
-        #     self.init_kf_buffer.clear() # 初始化成功后清空缓冲区
-        # else:
-        #     self.init_kf_buffer.pop(0) # 失败则滑动窗口
-        # viewer可视化
 
         return alignment_success
     
@@ -342,7 +386,49 @@ class Estimator(threading.Thread):
 
         last_kf = self.keyframe_window[-2]
 
+        # 创建上一帧到当前帧的IMU因子
         imu_factor_data = self.create_imu_factors(last_kf, new_kf)
         if not imu_factor_data:
             print(f"【Estimator】: No IMU factors between KF {last_kf.get_id()} and KF {new_kf.get_id()}.")
             return
+
+        # 从后端获取最新的优化结果
+        last_pose, last_vel, last_bias = self.backend.get_latest_optimized_state()
+        if last_pose is None:
+            print(f"[Warning] Could not retrieve last state from backend. Skipping KF {new_kf.get_id()}.")
+            return
+
+        # 使用当前帧的预积分来预测当前帧状态
+        pim = imu_factor_data['imu_preintegration']
+        predicted_nav_state = pim.predict(gtsam.NavState(last_pose, last_vel), last_bias)
+
+        predicted_T_wb = predicted_nav_state.pose()
+        predicted_T_wc = predicted_T_wb.compose(gtsam.Pose3(self.T_bc))
+        predicted_vel = predicted_nav_state.velocity()
+
+        # 设置临时预测位姿
+        new_kf.set_global_pose(predicted_T_wc.matrix())
+
+        # 进行新特征点三角化
+        new_landmarks = self.triangulate_new_landmarks(new_kf)
+        if new_landmarks:
+            print(f"【Tracking】: Triangulated {len(new_landmarks)} new landmarks.")
+            self.landmarks.update(new_landmarks)
+
+        # 将预测结果作为初始估计值以及重投影约束、IMU约束送入后端
+        self.backend.optimize_incremental(
+            last_keyframe=last_kf,
+            new_keyframe=new_kf,
+            new_imu_factors=imu_factor_data,
+            new_landmarks=new_landmarks,
+            # 以下是为历史状态通过当前IMU预积分提供的初始估计值
+            initial_state_guess=(predicted_T_wb, predicted_vel, last_bias),
+        )
+
+        # 优化结束，同步后端结果到Estimator
+        self.backend.update_estimator_map(self.keyframe_window, self.landmarks)
+
+        # 更新预积分器的零偏
+        _, _, latest_bias = self.backend.get_latest_optimized_state()
+        if latest_bias:
+            self.imu_processor.update_bias(latest_bias)
