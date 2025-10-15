@@ -44,28 +44,15 @@ class Backend:
 
     def optimize(self, new_keyframes, new_imu_factors, new_landmarks, initial_velocities=None, initial_bias=None):
 
-
         new_graph = gtsam.NonlinearFactorGraph()
         new_estimates = gtsam.Values()
 
+        # 判断是否初始化
         is_initialized = (initial_velocities is not None and initial_bias is not None)
-
-        # DEBUG
-        TARGET_LANDMARK_ID = 175
-        if TARGET_LANDMARK_ID in new_landmarks:
-            print("\n" + "="*20 + f" INVESTIGATION on Landmark {TARGET_LANDMARK_ID} " + "="*20)
-            print(f"  - Landmark {TARGET_LANDMARK_ID} exists in the initial map.")
-        # DEBUG
 
         for i, kf in enumerate(new_keyframes):
             kf_gtsam_id = self._get_kf_gtsam_id(kf.get_id())
-
-            # DEBUG
-            if TARGET_LANDMARK_ID in kf.get_visual_feature_ids():
-                print(f"  - Landmark {TARGET_LANDMARK_ID} is observed by KF {kf.get_id()}.")
-            # DEBUG
             
-
             if is_initialized:
                 T_wc = gtsam.Pose3(kf.get_global_pose())
                 T_cb = gtsam.Pose3(np.linalg.inv(self.T_bc))
@@ -118,9 +105,6 @@ class Backend:
                 new_estimates.insert(L(lm_gtsam_id), lm_3d_pos)
 
         # 添加重投影因子
-        # DEBUG
-        observation_count_for_target = 0
-        # DEBUG
         for kf in new_keyframes:
             kf_gtsam_id = self._get_kf_gtsam_id(kf.get_id())
             for lm_id, pt_2d in zip(kf.get_visual_feature_ids(), kf.get_visual_features()):
@@ -129,22 +113,10 @@ class Backend:
                 if lm_id in new_landmarks:
                     lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
 
-                    # DEBUG
-                    if lm_id == TARGET_LANDMARK_ID:
-                        print(f"    -> Creating a projection factor for Landmark {TARGET_LANDMARK_ID} from KF {kf.get_id()}.")
-                        observation_count_for_target += 1
-                    # DEBUG
-
                     visual_factor = gtsam.GenericProjectionFactorCal3_S2(
                         pt_2d, visual_factor_noise, X(kf_gtsam_id), L(lm_gtsam_id), 
                         self.K, body_P_sensor=T_bc_gtsam)
                     new_graph.add(visual_factor)
-
-        # DEBUG
-        if TARGET_LANDMARK_ID in new_landmarks:
-            print(f"  - Total projection factors created for Landmark {TARGET_LANDMARK_ID}: {observation_count_for_target}")
-            print("="*60 + "\n")
-        # DEBUG
 
         # 执行iSAM2更新
         print(f"【Backend】: Updating iSAM2 with {new_graph.size()} new factors and {new_estimates.size()} new values...")

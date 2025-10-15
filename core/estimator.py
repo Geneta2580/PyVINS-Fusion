@@ -138,7 +138,7 @@ class Estimator(threading.Thread):
 
         return None
         
-    # def check_motion_excitement(self):
+    # TODO:def check_motion_excitement(self):
 
 
     def visual_inertial_initialization(self):
@@ -172,6 +172,7 @@ class Estimator(threading.Thread):
         )
 
         if alignment_success:
+            # 重三角化地图点
             # 获取最终的位姿T_wc
             final_pose_ref = ref_kf.get_global_pose()
             final_pose_curr = curr_kf.get_global_pose()
@@ -203,6 +204,22 @@ class Estimator(threading.Thread):
             self.backend.optimize(initial_keyframes, initial_imu_factors, self.landmarks, velocities, initial_bias_obj)
 
             self.is_initialized = True
+
+            if self.viewer_queue:
+                print("【Init】: Sending initialization result to viewer queue...")
+
+                # VIOInitializer已经更新了所有KF的位姿
+                poses = {kf.get_id(): kf.get_global_pose() for kf in initial_keyframes if kf.get_global_pose() is not None}
+
+                vis_data = {
+                    'landmarks': self.landmarks.copy(), # self.landmarks 已经是重三角化后的精确结果
+                    'poses': poses
+                }
+
+                try:
+                    self.viewer_queue.put_nowait(vis_data)
+                except queue.Full:
+                    print("【Estimator】: Viewer queue is full, skipping this frame.")
         else:
             print("【Init】: V-I Alignment failed.")
 
@@ -230,7 +247,7 @@ class Estimator(threading.Thread):
         #     self.init_kf_buffer.pop(0) # 失败则滑动窗口
         # viewer可视化
 
-        return sfm_success
+        return alignment_success
     
     def visual_initialization(self, initial_keyframes):
         print("【Visual Init】: Searching for the best keyframe pair...")
@@ -253,7 +270,8 @@ class Estimator(threading.Thread):
 
             parallax = np.median(np.linalg.norm(p1_cand - p2_cand, axis=1))
 
-            if parallax > 40:
+            # 保证一定的视差，这里是一个非常敏感的参数
+            if parallax > 50:
                 print(f"【Visual Init】: Found a good pair! (KF {ref_kf.get_id()}, KF {potential_curr_kf.get_id()}) "
                       f"with parallax {parallax:.2f} px.")
 
@@ -269,18 +287,31 @@ class Estimator(threading.Thread):
             return False, None, None, None, None, None   
 
         # 三角化最优KF对的特征点
-        points_3d, mask = self.sfm_processor.triangulate_points(p1_best, p2_best, R_best, t_best)
+        points_3d_raw, mask_dpeth = self.sfm_processor.triangulate_points(p1_best, p2_best, R_best, t_best)
 
-        if len(points_3d) < 30:
-            print(f"【Visual Init】: Triangulation resulted in too few valid points ({len(points_3d)}).")
+        if len(points_3d_raw) < 30:
+            print(f"【Visual Init】: Triangulation resulted in too few valid points ({len(points_3d_raw)}).")
             return False, None, None, None, None, None
 
-        # 最终的内点id
-        valid_ids = np.array(ids_best)[mask]
+        p1_depth_ok = p1_best[mask_dpeth]
+        p2_depth_ok = p2_best[mask_dpeth]
+
+        final_points_3d, reprojection_mask = self.sfm_processor.filter_points_by_reprojection(
+            points_3d_raw, p1_depth_ok, p2_depth_ok, R_best, t_best
+        )
+
+        if len(final_points_3d) < 30:
+            print(f"【Visual Init】: Reprojection resulted in too few valid points ({len(final_points_3d)}).")
+            return False, None, None, None, None, None
+
+        intial_valid_ids = np.array(ids_best)[mask_dpeth]
+        final_valid_ids = intial_valid_ids[reprojection_mask]
+
+        print(f"【Visual Init】: Triangulation refined. Kept {len(final_points_3d)}/{len(points_3d_raw)} points.")
 
         # 加入地图
         self.landmarks.clear()
-        for landmark_id, landmark_pt in zip(valid_ids, points_3d):
+        for landmark_id, landmark_pt in zip(final_valid_ids, final_points_3d):
             self.landmarks[landmark_id] = landmark_pt
 
         # 设置curr_kf的位姿
@@ -315,58 +346,3 @@ class Estimator(threading.Thread):
         if not imu_factor_data:
             print(f"【Estimator】: No IMU factors between KF {last_kf.get_id()} and KF {new_kf.get_id()}.")
             return
-
-    # def _verify_landmarks_on_images(self, keyframes, landmarks, num_to_check=5):
-    #     """
-    #     一个调试函数，用于在图像上可视化验证三角化出的地图点。
-    #     """
-    #     if not landmarks:
-    #         print("【Verification】: No landmarks to verify.")
-    #         return
-
-    #     # 随机挑选几个 landmark 来检查
-    #     landmark_ids = list(landmarks.keys())
-    #     selected_ids = np.random.choice(landmark_ids, size=min(num_to_check, len(landmark_ids)), replace=False)
-
-    #     print(f"【Verification】: Checking landmarks with IDs: {selected_ids}")
-
-    #     # 为每个被选中的 landmark 创建一个图像拼接
-    #     for lm_id in selected_ids:
-    #         lm_3d_pos = landmarks[lm_id]
-    #         print(f"  - Verifying Landmark {lm_id} at 3D position {np.round(lm_3d_pos, 2)}")
-            
-    #         observing_images = []
-            
-    #         # 找到所有观测到这个 landmark 的关键帧
-    #         for kf in keyframes:
-    #             # 注意：这里需要 KeyFrame 类有一个 get_feature_ids() 的方法
-    #             kf_fids = kf.get_visual_feature_ids() 
-    #             if lm_id in kf_fids:
-    #                 # 获取图像和2D点坐标
-    #                 img = kf.get_image()
-    #                 if img is None: continue
-
-    #                 vis_img = img.copy()
-                    
-    #                 # 找到对应的2D点
-    #                 idx = np.where(kf_fids == lm_id)[0][0]
-    #                 # 注意：这里需要 KeyFrame 类有一个 get_features() 的方法
-    #                 pt_2d = kf.get_visual_features()[idx] 
-
-    #                 # 在图像上高亮显示
-    #                 pt_int = tuple(pt_2d.astype(int))
-    #                 cv2.circle(vis_img, pt_int, 5, (0, 0, 255), 2) # 红色圆圈
-    #                 cv2.putText(vis_img, f"ID:{lm_id}", (pt_int[0]+10, pt_int[1]-10), 
-    #                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2) # 绿色ID
-                    
-    #                 # 添加到待显示的图像列表
-    #                 observing_images.append(vis_img)
-            
-    #         # 将所有观测到该点的图像拼接起来显示
-    #         if observing_images:
-    #             montage = cv2.hconcat(observing_images)
-    #             cv2.imshow(f"Observations of Landmark ID {lm_id}", montage)
-        
-    #     print("\n【Verification】: Press any key on an image window to continue...")
-    #     cv2.waitKey(0) # 暂停程序，直到用户在图像窗口上按键
-    #     cv2.destroyAllWindows()

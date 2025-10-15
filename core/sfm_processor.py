@@ -60,30 +60,31 @@ class SfMProcessor:
         points4d_homo = cv2.triangulatePoints(proj_mat1, proj_mat2, pts1.T, pts2.T) # 4xN
 
         # 第一次筛选：找到所有 w > 1e-4 的有限点
-        finite_mask = points4d_homo[3, :] > 1e-4        
-        final_mask_for_caller = finite_mask # mask长度为N，与输入等长
-        
-        # 应用第一次筛选
+        finite_mask = np.abs(points4d_homo[3, :]) > 1e-4 
+        # print(f"【VO】: finite_mask: {finite_mask}")
+        # mask长度为N，与输入等长
+        final_mask_for_caller = finite_mask
         points4d_finite = points4d_homo[:, finite_mask] # 4xM
         if points4d_finite.shape[1] == 0:
             return np.array([]), np.zeros_like(finite_mask, dtype=bool)
 
+        # 转换为非齐次坐标
         points3d_finite = points4d_finite[:3] / points4d_finite[3] # 3xM
 
         # 第一张图深度检查
         positive_depth_mask1 = points3d_finite[2, :] > 0
 
         # 第二张图深度检查
-        points_in_cam2 = (R.T @ (points3d_finite - t))
+        points_in_cam2 = (R @ points3d_finite) + t
         positive_depth_mask2 = points_in_cam2[2, :] > 0
         
         cheirality_mask = positive_depth_mask1 & positive_depth_mask2 # 长度为M
 
-        # 4. 生成最终的3D点
+        # 生成最终的3D点
         final_points3d = points3d_finite[:, cheirality_mask].T # 形状(K, 3)
 
-        # 5. 更新最终的输出掩码，使其长度为N
-        #    只有在 finite_mask 中为True的位置，才可能被cheirality_mask进一步筛选
+        # print(f"【VO】: final_points3d: {final_points3d}")
+        # 更新最终的输出掩码，使其长度为N
         final_mask_for_caller[finite_mask] = cheirality_mask
         
         return final_points3d, final_mask_for_caller
@@ -121,4 +122,28 @@ class SfMProcessor:
 
         T_world_cam = np.linalg.inv(T_cam_world)
         return True, T_world_cam
+
+    
+    def filter_points_by_reprojection(self, points_3d, p1_matched, p2_matched, R, t, threshold=3.0):
+        if len(points_3d) == 0:
+            return np.array([]), np.array([], dtype=bool)
+
+        # 1. 投影回第一帧 (参考帧，位姿为单位矩阵)
+        rvec1_ident, tvec1_zero = np.zeros(3), np.zeros(3)
+        reprojected_pts1, _ = cv2.projectPoints(points_3d, rvec1_ident, tvec1_zero, self.cam_intrinsics, None)
+        
+        # 2. 投影回第二帧 (当前帧)
+        rvec2, _ = cv2.Rodrigues(R)
+        reprojected_pts2, _ = cv2.projectPoints(points_3d, rvec2, t.ravel(), self.cam_intrinsics, None)
+        
+        # 3. 计算误差
+        error1 = np.linalg.norm(p1_matched - reprojected_pts1.reshape(-1, 2), axis=1)
+        error2 = np.linalg.norm(p2_matched - reprojected_pts2.reshape(-1, 2), axis=1)
+        
+        # 4. 创建掩码并过滤
+        reprojection_mask = (error1 < threshold) & (error2 < threshold)
+        filtered_points_3d = points_3d[reprojection_mask]
+        
+        return filtered_points_3d, reprojection_mask
+
             
