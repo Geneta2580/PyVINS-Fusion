@@ -99,8 +99,8 @@ class Backend:
             # initial_velocities 是一个扁平化的数组，每3个元素是一个速度向量
             velocity = initial_velocities[i*3 : i*3+3]
             
-            # 只有第一个关键帧的偏置来自初始化器，后续的偏置在因子图中传递
-            bias = initial_bias if i == 0 else self.latest_bias
+            # 所有帧使用相同的初始偏置
+            bias = initial_bias
 
             estimates.insert(X(kf_gtsam_id), T_wb)
             estimates.insert(V(kf_gtsam_id), velocity)
@@ -114,6 +114,10 @@ class Backend:
                 graph.add(gtsam.PriorFactorPose3(X(0), T_wb, prior_pose_noise))
                 graph.add(gtsam.PriorFactorVector(V(0), velocity, prior_vel_noise))
                 graph.add(gtsam.PriorFactorConstantBias(B(0), bias, prior_bias_noise))
+            elif kf_gtsam_id == len(initial_keyframes) - 1:
+                # 为最后一帧添加较弱的位置先验以稳定尺度
+                prior_pose_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([0.1]*3 + [0.5]*3))
+                graph.add(gtsam.PriorFactorPose3(X(kf_gtsam_id), T_wb, prior_pose_noise))
 
         # 添加所有初始IMU因子
         for factor_data in initial_imu_factors:
@@ -138,18 +142,20 @@ class Backend:
                     lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
                     factor = gtsam.GenericProjectionFactorCal3_S2(pt_2d, visual_factor_noise, X(kf_gtsam_id), L(lm_gtsam_id), self.K, body_P_sensor=self.body_T_cam)
                     graph.add(factor)
-        
+
         # 执行iSAM2的第一次更新（批量模式）
         print(f"【Backend】: Initializing iSAM2 with {graph.size()} new factors and {estimates.size()} new values...")
         self.isam2.update(graph, estimates)
         for _ in range(2): self.isam2.update()
         
         # 更新最新bias
-        self.get_latest_optimized_state()
+        _, _, latest_bias = self.get_latest_optimized_state()
+        if latest_bias is not None:
+            self.latest_bias = latest_bias
         print("【Backend】: Initial graph optimization complete.")
 
 
-    def optimize_incremental(self, last_keyframe, new_keyframe, new_imu_factors, new_landmarks, initial_state_guess):
+    def optimize_incremental(self, last_keyframe, new_keyframe, keyframe_window, new_imu_factors, new_landmarks, initial_state_guess):
 
         new_graph = gtsam.NonlinearFactorGraph()
         new_estimates = gtsam.Values()
@@ -172,16 +178,60 @@ class Backend:
 
         visual_factor_noise = gtsam.noiseModel.Isotropic.Sigma(2, 1.5)
         for lm_id, lm_3d_pos in new_landmarks.items():
-            if not self.isam2.getLinearizationPoint().exists(L(lm_id)): # 检查点是否已在图中
-                lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
+            lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
+            if not self.isam2.getLinearizationPoint().exists(L(lm_gtsam_id)): # 检查点是否已在图中
                 new_estimates.insert(L(lm_gtsam_id), lm_3d_pos)
         
         # 为新关键帧添加重投影因子
         for lm_id, pt_2d in zip(new_keyframe.get_visual_feature_ids(), new_keyframe.get_visual_features()):
-            if self.isam2.getLinearizationPoint().exists(L(lm_id)) or lm_id in new_landmarks:
-                lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
+            lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
+            if self.isam2.getLinearizationPoint().exists(L(lm_gtsam_id)) or lm_id in new_landmarks:
                 factor = gtsam.GenericProjectionFactorCal3_S2(pt_2d, visual_factor_noise, X(kf_gtsam_id), L(lm_gtsam_id), self.K, body_P_sensor=self.body_T_cam)
                 new_graph.add(factor)
+
+        # 为关键帧窗口中的其他关键帧添加重投影因子，主要用于新三角化的路标点
+        for lm_id in new_landmarks.keys():
+            lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
+            for kf in keyframe_window:
+                # 跳过刚刚处理的新关键帧
+                if kf.get_id() == new_keyframe.get_id():
+                    continue
+
+                kf_feature_map = {fid: feat for fid, feat in zip(kf.get_visual_feature_ids(), kf.get_visual_features())}
+                if lm_id in kf_feature_map:
+                    pt_2d = kf_feature_map[lm_id]
+                    kf_gtsam_id = self._get_kf_gtsam_id(kf.get_id())
+                    factor = gtsam.GenericProjectionFactorCal3_S2(pt_2d, visual_factor_noise, X(kf_gtsam_id), L(lm_gtsam_id), self.K, body_P_sensor=self.body_T_cam)
+                    new_graph.add(factor)
+
+        suspect_lm_id = 134 # 假设ID是162
+        witness_kfs = []
+        for kf in keyframe_window:
+            if suspect_lm_id in kf.get_visual_feature_ids():
+                witness_kfs.append(kf)
+
+        if witness_kfs:
+            # 从GTSAM的优化结果中获取这些关键帧的位姿 (T_w_b)
+            result = self.isam2.calculateEstimate()
+            positions = []
+            for kf in witness_kfs:
+                gtsam_id = self.kf_id_to_gtsam_id.get(kf.get_id())
+                if gtsam_id is not None and result.exists(X(gtsam_id)):
+                    pose = result.atPose3(X(gtsam_id))
+                    positions.append(pose.translation())
+
+            if len(positions) > 1:
+                positions = np.array(positions)
+                # 计算所有位姿位置点的标准差
+                std_dev = np.std(positions, axis=0)
+                # 计算位置点的最大和最小坐标差（即包围盒大小）
+                ptp = np.ptp(positions, axis=0) 
+                
+                print(f"Positions of witnesses:\n{positions}")
+                print(f"Standard deviation of positions (x,y,z): {std_dev}")
+                print(f"Peak-to-peak (max-min) of positions (x,y,z): {ptp}")
+        else:
+            print(f"【Backend Warning】: No witness KFs found for landmark {suspect_lm_id}")
 
         # 行iSAM2增量更新
         print(f"【Backend】: Updating iSAM2 ({new_graph.size()} new factors, {new_estimates.size()} new variables)...")
@@ -189,5 +239,7 @@ class Backend:
         for _ in range(2): self.isam2.update()
 
         # 更新最新bias
-        self.get_latest_optimized_state()
+        _, _, latest_bias = self.get_latest_optimized_state()
+        if latest_bias is not None:
+            self.latest_bias = latest_bias
         print("【Backend】: Incremental optimization complete.")

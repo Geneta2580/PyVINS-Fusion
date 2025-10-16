@@ -263,11 +263,12 @@ class VIOInitializer:
         g0 = g0 / np.linalg.norm(g0) * gravity_magnitude
 
         scale = x[dim-1] / 100.0
+        velocities = x[:3*num_frames]
 
         print(f"【System Init】: refine scale: {scale}")
         print(f"【System Init】: refine result: {np.linalg.norm(g0)} refine gravity: {g0}")
 
-        return scale, g0
+        return scale, g0, velocities
 
     @staticmethod
     def align_to_world_frame(keyframes, velocities, refine_gravity, refine_scale, T_bc):
@@ -280,7 +281,7 @@ class VIOInitializer:
             pose_c0 = keyframes[i].get_global_pose()
             pose_c0[:3, 3] *= refine_scale
             keyframes[i].set_global_pose(pose_c0) # 尺度因子写入global_pose
-            velocities[i] *= refine_scale
+            # velocities[i*3 : i*3+3] *= refine_scale
 
         # 已知两重力，求c0到w系的变换矩阵
         ng1 = refine_gravity / np.linalg.norm(refine_gravity)
@@ -300,6 +301,8 @@ class VIOInitializer:
         R_final_w_c0 = R_yaw_correction @ R_w_c0
 
         gravity_w = R_final_w_c0 @ refine_gravity
+
+        R_cb = np.linalg.inv(T_bc[:3, :3])
 
         for i, kf in enumerate(keyframes):
             pose_c0 = kf.get_global_pose() # 这里是带尺度了的
@@ -331,8 +334,10 @@ class VIOInitializer:
             # final_trajectory.append(tum_line)
             # 打印初始化的轨迹
 
-            # 变换速度 (速度向量也需要旋转)
-            # velocities[i] = R_final_w_c0 @ velocities[i]
+            # 变换速度 (速度向量也需要旋转)，这里执行了一次原地修改
+            velocities[i*3 : i*3+3] = R_w_ci @ R_cb @ velocities[i*3 : i*3+3]
+
+            print(f"【Initializer】: KF {i}, Velocity: {velocities[i*3 : i*3+3]}")
         
         # 打印初始化的轨迹
         # output_path = 'test_trajectory.txt'
@@ -362,11 +367,11 @@ class VIOInitializer:
             print("【System Init】: Failed to intialize scale and gravity")
             return False, None, None, None, None
 
-        refine_scale, refine_gravity = VIOInitializer.refine_gravity(keyframes, repropagated_imu_factors, gravity, gravity_magnitude, T_bc)
+        refine_scale, refine_gravity, refine_velocities = VIOInitializer.refine_gravity(keyframes, repropagated_imu_factors, gravity, gravity_magnitude, T_bc)
         if refine_scale is None or refine_gravity is None:
             print("【System Init】: Failed to refine scale and gravity")
             return False, None, None, None, None
 
-        gravity_w = VIOInitializer.align_to_world_frame(keyframes, velocities, refine_gravity, refine_scale, T_bc)
+        gravity_w = VIOInitializer.align_to_world_frame(keyframes, refine_velocities, refine_gravity, refine_scale, T_bc)
 
-        return True, refine_scale, bg0, velocities, gravity_w
+        return True, refine_scale, bg0, refine_velocities, gravity_w

@@ -167,7 +167,13 @@ class Estimator(threading.Thread):
             last_obs = observation[-1]
 
             # 获取持有观测的第一个和最后一个KF
-            first_kf = self.keyframe_window[first_obs['kf_id']]
+            first_kf_id = first_obs['kf_id']
+            first_kf = None
+            for kf in self.keyframe_window:
+                if kf.get_id() == first_kf_id:
+                    first_kf = kf
+                    break
+
             last_kf = new_kf
 
             if first_kf is None or last_kf is None:
@@ -265,9 +271,15 @@ class Estimator(threading.Thread):
             initial_bias_obj = gtsam.imuBias.ConstantBias(np.zeros(3), gyro_bias)
             self.imu_processor.update_bias(initial_bias_obj)
             
+            poses = {kf.get_id(): kf.get_global_pose() for kf in initial_keyframes if kf.get_global_pose() is not None}
+            for kf_id, pose in poses.items():
+                print(f"【Init】: Before optimization. kf_id: {kf_id}, pose: {pose[:3, 3]}")
+
             # 进行初始优化
             self.backend.initialize_optimize(initial_keyframes, initial_imu_factors, self.landmarks, velocities, initial_bias_obj)
 
+            # 初始优化结束，同步后端结果到Estimator
+            self.backend.update_estimator_map(self.keyframe_window, self.landmarks)
             self.is_initialized = True
 
             # viewer可视化
@@ -276,7 +288,10 @@ class Estimator(threading.Thread):
 
                 # VIOInitializer已经更新了所有KF的位姿
                 poses = {kf.get_id(): kf.get_global_pose() for kf in initial_keyframes if kf.get_global_pose() is not None}
-
+                for kf_id, pose in poses.items():
+                    print(f"【Init】: Initialization complete. kf_id: {kf_id}, pose: {pose[:3, 3]}")
+                
+                # 获取最新优化结果
                 vis_data = {
                     'landmarks': self.landmarks.copy(), # self.landmarks 已经是重三角化后的精确结果
                     'poses': poses
@@ -414,11 +429,13 @@ class Estimator(threading.Thread):
         if new_landmarks:
             print(f"【Tracking】: Triangulated {len(new_landmarks)} new landmarks.")
             self.landmarks.update(new_landmarks)
+        # print(f"【Tracking】: New landmarks: {new_landmarks}")
 
         # 将预测结果作为初始估计值以及重投影约束、IMU约束送入后端
         self.backend.optimize_incremental(
             last_keyframe=last_kf,
             new_keyframe=new_kf,
+            keyframe_window=self.keyframe_window,
             new_imu_factors=imu_factor_data,
             new_landmarks=new_landmarks,
             # 以下是为历史状态通过当前IMU预积分提供的初始估计值

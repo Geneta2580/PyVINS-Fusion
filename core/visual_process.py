@@ -6,7 +6,7 @@ class VisualProcessor:
     def __init__(self, config):
         # 前端切换关键帧参数
         self.config = config
-        self.max_features_to_detect = self.config.get('max_features_to_detect', 1000) # 最大特征点数
+        self.max_features_to_detect = self.config.get('max_features_to_detect', 500) # 最大特征点数
         self.min_parallax = self.config.get('min_parallax', 10) # 最小视差
         self.min_track_ratio = self.config.get('min_track_ratio', 0.8) # 最小跟踪比例
         self.visualize_flag = self.config.get('visualize', True) # 是否可视化追踪结果
@@ -147,6 +147,7 @@ class VisualProcessor:
 
         # 如果跟踪到的特征点太少，则补充特征点
         if len(good_curr) < (self.max_features_to_detect * self.min_track_ratio):
+            # print(f"【Visual Processor】: Not enough features tracked. Need to detect more features.")
             is_kf = True
             mask = np.ones_like(curr_gray)
             for pt in good_curr.reshape(-1, 2):
