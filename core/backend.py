@@ -79,10 +79,13 @@ class Backend:
                 kf.set_global_pose(pose_w_c.matrix())
 
         # 更新路标点坐标
-        for lm_id in landmarks.keys():
-            gtsam_id = self.landmark_id_to_gtsam_id.get(lm_id)
+        for lm_id, landmark_obj in landmarks.items():
+            gtsam_id = self._get_lm_gtsam_id(lm_id)
             if gtsam_id is not None and optimized_results.exists(L(gtsam_id)):
-                landmarks[lm_id] = optimized_results.atPoint3(L(gtsam_id))
+                # 1. 从优化结果中获取最新的3D坐标
+                optimized_position = optimized_results.atPoint3(L(gtsam_id))
+                # 2. 调用对象的方法来更新其内部状态
+                landmark_obj.set_triangulated(optimized_position)
 
     def initialize_optimize(self, initial_keyframes, initial_imu_factors, initial_landmarks, initial_velocities, initial_bias):
         print("【Backend】: Initializing optimize...")
@@ -204,7 +207,7 @@ class Backend:
                     factor = gtsam.GenericProjectionFactorCal3_S2(pt_2d, visual_factor_noise, X(kf_gtsam_id), L(lm_gtsam_id), self.K, body_P_sensor=self.body_T_cam)
                     new_graph.add(factor)
 
-        suspect_lm_id = 134 # 假设ID是162
+        suspect_lm_id = 34 # 假设ID是162
         witness_kfs = []
         for kf in keyframe_window:
             if suspect_lm_id in kf.get_visual_feature_ids():
