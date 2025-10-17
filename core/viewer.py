@@ -41,9 +41,11 @@ class Viewer3D(threading.Thread):
                 print("【Viewer】: Received new data, caching for update.")
                 with self.lock:
                     if 'landmarks' in data:
-                        self.landmarks.update(data['landmarks'])
+                        self.landmarks = data['landmarks']
+                        # self.landmarks.update(data['landmarks'])
                     if 'poses' in data:
-                        self.poses.update(data['poses'])
+                        self.poses = data['poses']
+                        # self.poses.update(data['poses'])
                 
             except queue.Empty:
                 pass

@@ -34,7 +34,7 @@ class Landmark:
 
     def is_ready_for_triangulation(self, keyframe_window, min_parallax=50):
         # 必须是候选点，且至少有三个观测
-        if self.status != LandmarkStatus.CANDIDATE or self.get_observation_count() < 3:
+        if self.status != LandmarkStatus.CANDIDATE or self.get_observation_count() < 4:
             return False, None, None
 
         # 找到第一个和最后一个观测它的、且仍在滑动窗口内的关键帧
@@ -52,9 +52,8 @@ class Landmark:
         pt1 = self.observations[first_kf_id]
         pt2 = self.observations[last_kf_id]
         parallax = np.linalg.norm(pt1 - pt2)
-        median_parallax = np.median(parallax)
 
-        if median_parallax > min_parallax:
+        if parallax > min_parallax:
             return True, first_kf, last_kf
         else:
             return False, None, None

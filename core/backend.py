@@ -2,6 +2,7 @@ import queue
 import numpy as np
 import gtsam
 from gtsam.symbol_shorthand import X, V, B, L
+import re
 
 class Backend:
     def __init__(self, global_central_map, config, imu_processor):
@@ -132,7 +133,7 @@ class Backend:
             graph.add(gtsam.CombinedImuFactor(X(gtsam_id1), V(gtsam_id1), X(gtsam_id2), V(gtsam_id2), B(gtsam_id1), B(gtsam_id2), pim))
 
         # 添加所有初始路标点变量和视觉因子
-        visual_factor_noise = gtsam.noiseModel.Isotropic.Sigma(2, 1.5)
+        visual_factor_noise = gtsam.noiseModel.Isotropic.Sigma(2, 3.0)
         for lm_id, lm_3d_pos in initial_landmarks.items():
             lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
             estimates.insert(L(lm_gtsam_id), lm_3d_pos)
@@ -158,7 +159,8 @@ class Backend:
         print("【Backend】: Initial graph optimization complete.")
 
 
-    def optimize_incremental(self, last_keyframe, new_keyframe, keyframe_window, new_imu_factors, new_landmarks, initial_state_guess):
+    def optimize_incremental(self, last_keyframe, new_keyframe, new_imu_factors, 
+                            new_landmarks, new_visual_factors, initial_state_guess):
 
         new_graph = gtsam.NonlinearFactorGraph()
         new_estimates = gtsam.Values()
@@ -179,67 +181,67 @@ class Backend:
             B(last_kf_gtsam_id), B(kf_gtsam_id), pim)
         new_graph.add(imu_factor)
 
-        visual_factor_noise = gtsam.noiseModel.Isotropic.Sigma(2, 1.5)
+        # 添加新路标点顶点
         for lm_id, lm_3d_pos in new_landmarks.items():
             lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
-            if not self.isam2.getLinearizationPoint().exists(L(lm_gtsam_id)): # 检查点是否已在图中
+            # 检查：1) 不在旧图中，2) 还没被添加过
+            if not self.isam2.getLinearizationPoint().exists(L(lm_gtsam_id)):
                 new_estimates.insert(L(lm_gtsam_id), lm_3d_pos)
         
-        # 为新关键帧添加重投影因子
-        for lm_id, pt_2d in zip(new_keyframe.get_visual_feature_ids(), new_keyframe.get_visual_features()):
+        # 添加重投影因子，前面已经添加了新路标点顶点，所以这里只需要添加历史点和新特征点的观测帧重投影因子
+        visual_factor_noise = gtsam.noiseModel.Isotropic.Sigma(2, 3.0)
+        for kf_id, lm_id, pt_2d in new_visual_factors:
+            kf_gtsam_id = self._get_kf_gtsam_id(kf_id)
             lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
-            if self.isam2.getLinearizationPoint().exists(L(lm_gtsam_id)) or lm_id in new_landmarks:
+
+            kf_exists = self.isam2.getLinearizationPoint().exists(X(kf_gtsam_id))
+            lm_exists = self.isam2.getLinearizationPoint().exists(L(lm_gtsam_id))
+
+            if kf_exists and lm_exists:
                 factor = gtsam.GenericProjectionFactorCal3_S2(pt_2d, visual_factor_noise, X(kf_gtsam_id), L(lm_gtsam_id), self.K, body_P_sensor=self.body_T_cam)
                 new_graph.add(factor)
 
-        # 为关键帧窗口中的其他关键帧添加重投影因子，主要用于新三角化的路标点
-        for lm_id in new_landmarks.keys():
-            lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
-            for kf in keyframe_window:
-                # 跳过刚刚处理的新关键帧
-                if kf.get_id() == new_keyframe.get_id():
-                    continue
+        # # 为新关键帧添加重投影因子
+        # for lm_id, pt_2d in zip(new_keyframe.get_visual_feature_ids(), new_keyframe.get_visual_features()):
 
-                kf_feature_map = {fid: feat for fid, feat in zip(kf.get_visual_feature_ids(), kf.get_visual_features())}
-                if lm_id in kf_feature_map:
-                    pt_2d = kf_feature_map[lm_id]
-                    kf_gtsam_id = self._get_kf_gtsam_id(kf.get_id())
-                    factor = gtsam.GenericProjectionFactorCal3_S2(pt_2d, visual_factor_noise, X(kf_gtsam_id), L(lm_gtsam_id), self.K, body_P_sensor=self.body_T_cam)
-                    new_graph.add(factor)
+        #     if not self.check_landmark_health(lm_id, keyframe_window):
+        #         continue # 如果几何不好，就跳过这个因子，不添加
 
-        suspect_lm_id = 34 # 假设ID是162
-        witness_kfs = []
-        for kf in keyframe_window:
-            if suspect_lm_id in kf.get_visual_feature_ids():
-                witness_kfs.append(kf)
+        #     lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
+        #     if self.isam2.getLinearizationPoint().exists(L(lm_gtsam_id)) or lm_id in new_landmarks:
+        #         factor = gtsam.GenericProjectionFactorCal3_S2(pt_2d, visual_factor_noise, X(kf_gtsam_id), L(lm_gtsam_id), self.K, body_P_sensor=self.body_T_cam)
+        #         new_graph.add(factor)
 
-        if witness_kfs:
-            # 从GTSAM的优化结果中获取这些关键帧的位姿 (T_w_b)
-            result = self.isam2.calculateEstimate()
-            positions = []
-            for kf in witness_kfs:
-                gtsam_id = self.kf_id_to_gtsam_id.get(kf.get_id())
-                if gtsam_id is not None and result.exists(X(gtsam_id)):
-                    pose = result.atPose3(X(gtsam_id))
-                    positions.append(pose.translation())
+        # # 为关键帧窗口中的其他关键帧添加重投影因子，主要用于新三角化的路标点
+        # for lm_id in new_landmarks.keys():
 
-            if len(positions) > 1:
-                positions = np.array(positions)
-                # 计算所有位姿位置点的标准差
-                std_dev = np.std(positions, axis=0)
-                # 计算位置点的最大和最小坐标差（即包围盒大小）
-                ptp = np.ptp(positions, axis=0) 
-                
-                print(f"Positions of witnesses:\n{positions}")
-                print(f"Standard deviation of positions (x,y,z): {std_dev}")
-                print(f"Peak-to-peak (max-min) of positions (x,y,z): {ptp}")
-        else:
-            print(f"【Backend Warning】: No witness KFs found for landmark {suspect_lm_id}")
+        #     if not self.check_landmark_health(lm_id, keyframe_window):
+        #         continue # 如果几何不好，就跳过这个因子，不添加
 
-        # 行iSAM2增量更新
+        #     lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
+        #     for kf in keyframe_window:
+        #         # 跳过刚刚处理的新关键帧
+        #         if kf.get_id() == new_keyframe.get_id():
+        #             continue
+
+        #         kf_feature_map = {fid: feat for fid, feat in zip(kf.get_visual_feature_ids(), kf.get_visual_features())}
+        #         if lm_id in kf_feature_map:
+        #             pt_2d = kf_feature_map[lm_id]
+        #             kf_gtsam_id = self._get_kf_gtsam_id(kf.get_id())
+        #             factor = gtsam.GenericProjectionFactorCal3_S2(pt_2d, visual_factor_noise, X(kf_gtsam_id), L(lm_gtsam_id), self.K, body_P_sensor=self.body_T_cam)
+        #             new_graph.add(factor)
+
+        # 执行iSAM2增量更新
         print(f"【Backend】: Updating iSAM2 ({new_graph.size()} new factors, {new_estimates.size()} new variables)...")
+        
+        # try:
         self.isam2.update(new_graph, new_estimates)
         for _ in range(2): self.isam2.update()
+
+        # except RuntimeError as e:
+        #     print("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        #     print("!!!!!!!!!! OPTIMIZATION FAILED !!!!!!!!!!!!!!")
+        #     print(f"ERROR: {e}")
 
         # 更新最新bias
         _, _, latest_bias = self.get_latest_optimized_state()

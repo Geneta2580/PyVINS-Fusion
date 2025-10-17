@@ -65,7 +65,7 @@ class IMUProcessor:
         for imu_data in measurements:
             timestamp, data = imu_data
 
-            if timestamp > last_timestamp:
+            if timestamp >= last_timestamp:
                 dt = timestamp - last_timestamp # 注意这里的单位应该是s
                 if dt <=0:
                     continue

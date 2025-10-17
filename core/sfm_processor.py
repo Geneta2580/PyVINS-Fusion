@@ -36,15 +36,17 @@ class SfMProcessor:
             return False, None, None, None, None, None
 
         # 计算基础矩阵
-        num_inliers, R, t, mask = cv2.recoverPose(E, pts1, pts2, self.cam_intrinsics, inlier_mask)
+        num_inliers, R, t, final_inlier_mask = cv2.recoverPose(E, pts1, pts2, self.cam_intrinsics, inlier_mask)
         if num_inliers < 30:
             print("【VO】: Failed to recover pose")
             return False, None, None, None, None, None
 
+        final_mask_bool = final_inlier_mask.ravel().astype(bool)
+
         # 过滤并返回内点信息，这里过滤的不能过于严格
-        inlier_ids = np.array(common_ids)[inlier_mask.ravel().astype(bool)]
-        pts1_inliers = pts1[inlier_mask.ravel().astype(bool)]
-        pts2_inliers = pts2[inlier_mask.ravel().astype(bool)]
+        inlier_ids = np.array(common_ids)[final_mask_bool]
+        pts1_inliers = pts1[final_mask_bool]
+        pts2_inliers = pts2[final_mask_bool]
 
         return True, inlier_ids, pts1_inliers, pts2_inliers, R, t
         
@@ -124,7 +126,7 @@ class SfMProcessor:
         return True, T_world_cam
 
     
-    def filter_points_by_reprojection(self, points_3d, p1_matched, p2_matched, R, t, threshold=3.0):
+    def filter_points_by_reprojection(self, points_3d, p1_matched, p2_matched, R, t, threshold=1.5):
         if len(points_3d) == 0:
             return np.array([]), np.array([], dtype=bool)
 

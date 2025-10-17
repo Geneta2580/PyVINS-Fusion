@@ -1,6 +1,6 @@
-# 文件: map/local_map.py
 from collections import deque
 from datatype.landmark import Landmark, LandmarkStatus
+import numpy as np
 
 class LocalMap:
     def __init__(self, config):
@@ -56,4 +56,36 @@ class LocalMap:
     def get_candidate_landmarks(self):
         return [lm for lm in self.landmarks.values() if lm.status == LandmarkStatus.CANDIDATE]
 
-    # ... 您还可以将 triangulate_new_landmarks 的逻辑也移入此类 ...
+    def check_landmark_health(self, landmark_id, min_baseline_m=0.2):
+        # 1. 找到所有观测到此路标点的活动关键帧
+        lm = self.landmarks.get(landmark_id)
+        if not lm:
+            return False
+
+        observing_kf_ids = lm.get_observing_kf_ids()
+        witness_kfs = [self.keyframes[kf_id] for kf_id in observing_kf_ids if kf_id in self.keyframes]
+
+        # 2. 至少需要2个观测帧才能计算基线
+        if len(witness_kfs) < 2:
+            return False
+            
+        positions = []
+        for kf in witness_kfs:
+            pose = kf.get_global_pose()
+            positions.append(pose[:3, 3])
+
+        # 4. 确保我们成功获取了至少2个位姿
+        if len(positions) < 2:
+            return False
+            
+        # 5. 计算观测基线（所有观测位置点构成的包围盒的对角线长度）
+        positions = np.array(positions)
+        baseline = np.linalg.norm(np.ptp(positions, axis=0))
+
+        # 6. 与阈值比较
+        if baseline < min_baseline_m:
+            # print(f"【Health Check】: Landmark {landmark_id} is UNHEALTHY, baseline: {baseline:.4f}m")
+            return False
+        
+        # print(f"【Health Check】: Landmark {landmark_id} is HEALTHY, baseline: {baseline:.4f}m")
+        return True

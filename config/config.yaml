@@ -12,6 +12,9 @@ dataset_type: "euroc"
 # ----------------------------------------------------------------------------
 # 视觉前端配置参数
 # ----------------------------------------------------------------------------
+# 窗口大小
+window_size: 15
+
 # 选择关键帧最小视差
 min_parallax: 10
 
@@ -47,8 +50,8 @@ gravity: 9.81
 # 注意这里只是sigma，不是sigma^2
 accel_noise_sigma: 0.01
 gyro_noise_sigma: 0.001
-accel_bias_rw_sigma: 0.000001 # 零偏随机游走
-gyro_bias_rw_sigma: 0.000001
+accel_bias_rw_sigma: 0.0001 # 零偏随机游走
+gyro_bias_rw_sigma: 0.00001
 
 # 初始化窗口大小
 init_window_size: 10

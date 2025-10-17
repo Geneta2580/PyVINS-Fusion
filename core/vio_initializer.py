@@ -281,7 +281,7 @@ class VIOInitializer:
             pose_c0 = keyframes[i].get_global_pose()
             pose_c0[:3, 3] *= refine_scale
             keyframes[i].set_global_pose(pose_c0) # 尺度因子写入global_pose
-            # velocities[i*3 : i*3+3] *= refine_scale
+            # velocities[i*3 : i*3+3] *= refine_scale # 这里不需要乘尺度因子，因为速度是相对的
 
         # 已知两重力，求c0到w系的变换矩阵
         ng1 = refine_gravity / np.linalg.norm(refine_gravity)

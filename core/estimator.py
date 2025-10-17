@@ -1,13 +1,7 @@
-from collections import deque
-from ctypes import alignment
-from re import S
-from tkinter import N
 import gtsam
-import cv2
 import numpy as np
 import threading
 import queue
-from collections import deque
 
 from .backend import Backend
 from datatype.keyframe import KeyFrame
@@ -260,7 +254,7 @@ class Estimator(threading.Thread):
                 active_kfs = self.local_map.get_active_keyframes()
                 poses = {kf.get_id(): kf.get_global_pose() for kf in active_kfs if kf.get_global_pose() is not None}
                 
-                # 【核心修正】调用 LocalMap 的辅助函数来获取纯粹的位置字典
+                # 调用 LocalMap 的辅助函数来获取纯粹的位置字典
                 landmarks_positions = self.local_map.get_active_landmarks()
 
                 vis_data = {
@@ -303,8 +297,8 @@ class Estimator(threading.Thread):
 
             parallax = np.median(np.linalg.norm(p1_cand - p2_cand, axis=1))
 
-            # 保证一定的视差，这里是一个非常敏感的参数
-            if parallax > 50:
+            # 保证一定的视差，这里是一个非常敏感的参数，每次代码改动都可能需要重新调整这个参数
+            if parallax > 70:
                 print(f"【Visual Init】: Found a good pair! (KF {ref_kf.get_id()}, KF {potential_curr_kf.get_id()}) "
                       f"with parallax {parallax:.2f} px.")
 
@@ -427,14 +421,31 @@ class Estimator(threading.Thread):
         if new_landmarks:
             print(f"【Tracking】: Triangulated {len(new_landmarks)} new landmarks.")
 
+        # 为后端准备重投影因子
+        visual_factors_to_add = []
+        for lm_id in new_landmarks.keys():
+            lm = self.local_map.landmarks.get(lm_id)
+            if lm:
+                for obs_kf_id, obs_pt_2d in lm.observations.items():
+                    # 指令格式: (关键帧ID, 路标点ID, 2D观测坐标)
+                    visual_factors_to_add.append((obs_kf_id, lm_id, obs_pt_2d))
+
+        # 添加旧点重投影因子 (不在新三角化列表里)
+        for lm_id, pt_2d in zip(new_kf.get_visual_feature_ids(), new_kf.get_visual_features()):
+            if lm_id not in new_landmarks:
+                # 必须是活跃点 (没有被剔除)
+                if lm_id in self.local_map.landmarks:
+                    # 在这里做一次基线长度检查
+                    if self.local_map.check_landmark_health(lm_id):
+                        visual_factors_to_add.append((new_kf.get_id(), lm_id, pt_2d))
+
         # 将预测结果作为初始估计值以及重投影约束、IMU约束送入后端
         self.backend.optimize_incremental(
             last_keyframe=last_kf,
             new_keyframe=new_kf,
-            keyframe_window=active_kfs,
             new_imu_factors=imu_factor_data,
             new_landmarks=new_landmarks,
-            # 以下是为历史状态通过当前IMU预积分提供的初始估计值
+            new_visual_factors=visual_factors_to_add,
             initial_state_guess=(predicted_T_wb, predicted_vel, last_bias),
         )
 
@@ -446,7 +457,7 @@ class Estimator(threading.Thread):
         if latest_bias:
             self.imu_processor.update_bias(latest_bias)
 
-
+        # viewer可视化
         if self.viewer_queue:
             print("【Tracking】: Sending tracking result to viewer queue...")
 
