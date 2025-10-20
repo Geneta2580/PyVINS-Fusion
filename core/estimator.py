@@ -89,7 +89,10 @@ class Estimator(threading.Thread):
                     new_kf.set_image(image)
 
                     self.next_kf_id += 1
-                    self.local_map.add_keyframe(new_kf)
+                    stale_lm_ids = self.local_map.add_keyframe(new_kf)
+
+                    if stale_lm_ids:
+                        self.backend.remove_stale_landmarks(stale_lm_ids)
 
                     active_keyframes = self.local_map.get_active_keyframes()
 
@@ -139,10 +142,22 @@ class Estimator(threading.Thread):
     def triangulate_new_landmarks(self, new_kf):
         newly_triangulated_for_backend = {}
         keyframe_window = self.local_map.get_active_keyframes()
-
+        # DEBUG
+        suspect_lm_id = 5311
+        # DEBUG
         for lm in self.local_map.get_candidate_landmarks():
+            # DEBUG
+            if lm.id == suspect_lm_id:
+                print(f"🕵️‍ [Trace l{suspect_lm_id}]: Is a candidate. Checking for triangulation...")
+            # DEBUG
+            
             is_ready, first_kf, last_kf = lm.is_ready_for_triangulation(keyframe_window, min_parallax=50)
 
+            # DEBUG
+            if lm.id == suspect_lm_id and is_ready:
+                print(f"🕵️‍ [Trace l{suspect_lm_id}]: PASSED triangulation check (ready). Using KF {first_kf.get_id()} and KF {last_kf.get_id()}.")
+            # DEBUG
+            
             if is_ready:
                 pose1 = first_kf.get_global_pose()
                 pose2 = last_kf.get_global_pose()
@@ -161,9 +176,30 @@ class Estimator(threading.Thread):
 
                 if len(points_3d_in_c1) > 0:
                     points_3d_world = (pose1[:3, :3] @ points_3d_in_c1.T + pose1[:3, 3].reshape(3, 1)).flatten()
+                    # DEBUG
+                    if lm.id == suspect_lm_id:
+                        print(f"🕵️‍ [Trace l{suspect_lm_id}]: TRIANGULATED successfully to position {points_3d_world}.")
+                    # DEBUG
 
-                    lm.set_triangulated(points_3d_world)
-                    newly_triangulated_for_backend[lm.id] = points_3d_world
+                    is_healthy = self.local_map.check_landmark_health(lm.id, points_3d_world)
+                    if is_healthy:
+                        lm.set_triangulated(points_3d_world)
+                        newly_triangulated_for_backend[lm.id] = points_3d_world
+                        # DEBUG
+                        if lm.id == suspect_lm_id:
+                            print(f"🕵️‍ [Trace l{suspect_lm_id}]: PASSED health check. Adding its factors...")
+                        # DEBUG
+                    
+                    else:
+                        # DEBUG
+                        if lm.id == suspect_lm_id:
+                            print(f"🕵️‍ [Trace l{suspect_lm_id}]: FAILED health check. Not adding its factors...")
+                        # DEBUG
+                        continue
+                
+                else:
+                    if lm.id == suspect_lm_id:
+                            print(f"🕵️‍ [Trace l{suspect_lm_id}]: FAILED multi-view validation after triangulation.")
     
         return newly_triangulated_for_backend
             
@@ -421,23 +457,43 @@ class Estimator(threading.Thread):
         if new_landmarks:
             print(f"【Tracking】: Triangulated {len(new_landmarks)} new landmarks.")
 
+        # DEBUG
+        suspect_lm_id = 5311
+        # DEBUG
+        
         # 为后端准备重投影因子
         visual_factors_to_add = []
         for lm_id in new_landmarks.keys():
+            # DEBUG
+            if lm_id == suspect_lm_id:
+                print(f"🕵️‍ [Trace l{suspect_lm_id}]: Is newly triangulated. Preparing its factors...")
+            # DEBUG
             lm = self.local_map.landmarks.get(lm_id)
             if lm:
+                # DEBUG
+                if lm_id == suspect_lm_id:
+                    print(f"🕵️‍ [Trace l{suspect_lm_id}]: PASSED health check. Adding its factors...")
+                # DEBUG
                 for obs_kf_id, obs_pt_2d in lm.observations.items():
                     # 指令格式: (关键帧ID, 路标点ID, 2D观测坐标)
                     visual_factors_to_add.append((obs_kf_id, lm_id, obs_pt_2d))
+                    if lm_id == suspect_lm_id:
+                        print(f"🕵️‍ [Trace l{suspect_lm_id}]: OBSERVED by new KF {obs_kf_id}. observation point: {obs_pt_2d}")
+                        # print(f"🕵️‍ [Trace l{suspect_lm_id}]: OBSERVED by new KF {obs_kf_id}. observation point: {obs_pt_2d}")
 
         # 添加旧点重投影因子 (不在新三角化列表里)
         for lm_id, pt_2d in zip(new_kf.get_visual_feature_ids(), new_kf.get_visual_features()):
             if lm_id not in new_landmarks:
                 # 必须是活跃点 (没有被剔除)
                 if lm_id in self.local_map.landmarks:
-                    # 在这里做一次基线长度检查
-                    if self.local_map.check_landmark_health(lm_id):
-                        visual_factors_to_add.append((new_kf.get_id(), lm_id, pt_2d))
+                    # DEBUG
+                    if lm_id == suspect_lm_id:
+                        print(f"🕵️‍ [Trace l{suspect_lm_id}]: PASSED health check. Adding its factors...")
+                    # DEBUG
+                    visual_factors_to_add.append((new_kf.get_id(), lm_id, pt_2d))
+
+        print(f"【Debug】: Newly triangulated landmarks count: {len(new_landmarks)}")
+        print(f"【Debug】: Factor instructions generated: {len(visual_factors_to_add)}")
 
         # 将预测结果作为初始估计值以及重投影约束、IMU约束送入后端
         self.backend.optimize_incremental(

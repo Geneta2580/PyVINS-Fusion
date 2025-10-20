@@ -19,6 +19,10 @@ class Landmark:
     def add_observation(self, kf_id, pt_2d):
         self.observations[kf_id] = pt_2d
 
+    def remove_observation(self, kf_id):
+        if kf_id in self.observations:
+            del self.observations[kf_id]
+
     def get_observation_count(self):
         return len(self.observations)
 

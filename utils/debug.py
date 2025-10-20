@@ -1,8 +1,65 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+from datetime import datetime
+import os
+import csv
 
 class Debugger:
+    def __init__(self, log_dir="output", file_prefix="log", column_names=None, use_timestamp=True):
+        """
+        初始化日志记录器。
+
+        参数:
+            log_dir (str): 存储日志文件的目录。如果不存在，会自动创建。
+            file_prefix (str): 日志文件名的前缀。
+            column_names (list of str): 用户提供的数据列的表头列表。例如: ['error', 'velocity']。
+            use_timestamp (bool): 是否在文件名中添加时间戳（推荐）。
+        """
+        if column_names is None:
+            column_names = ['value'] # 如果未提供列名，则默认为'value'
+
+        # --- 1. 创建日志目录 ---
+        os.makedirs(log_dir, exist_ok=True)
+
+        # --- 2. 构建文件名 ---
+        if use_timestamp:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            file_name = f"{file_prefix}_{timestamp}.csv"
+        else:
+            file_name = f"{file_prefix}.csv"
+        
+        self.log_path = os.path.join(log_dir, file_name)
+        self.round_counter = 0
+
+        # --- 3. 打开文件并写入表头 ---
+        # 使用'w'模式（写入）和 newline='' 来防止写入空行
+        self.file_handle = open(self.log_path, 'w', newline='', encoding='utf-8')
+        self.writer = csv.writer(self.file_handle)
+        
+        # 写入完整的表头，第一列总是'Round'
+        header = ['Round'] + column_names
+        self.writer.writerow(header)
+        
+        print(f"【Logger】Logging to {self.log_path}")
+
+    def log(self, *values):
+        row = [self.round_counter] + list(values)
+        self.writer.writerow(row)
+        self.round_counter += 1
+
+    def close(self):
+        if self.file_handle:
+            self.file_handle.close()
+            self.file_handle = None
+            print(f"【Logger】Closed log file {self.log_path}")
+            
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
     @staticmethod
     def save_full_matrix_python(matrix):
         try:

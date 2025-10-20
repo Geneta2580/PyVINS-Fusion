@@ -48,10 +48,10 @@ visualize: True
 gravity: 9.81
 
 # 注意这里只是sigma，不是sigma^2
-accel_noise_sigma: 0.01
-gyro_noise_sigma: 0.001
-accel_bias_rw_sigma: 0.0001 # 零偏随机游走
-gyro_bias_rw_sigma: 0.00001
+accel_noise_sigma: 0.1
+gyro_noise_sigma: 0.01
+accel_bias_rw_sigma: 0.001 # 零偏随机游走
+gyro_bias_rw_sigma: 0.001
 
 # 初始化窗口大小
 init_window_size: 10

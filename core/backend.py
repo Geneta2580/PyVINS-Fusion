@@ -3,6 +3,7 @@ import numpy as np
 import gtsam
 from gtsam.symbol_shorthand import X, V, B, L
 import re
+from utils.debug import Debugger
 
 class Backend:
     def __init__(self, global_central_map, config, imu_processor):
@@ -32,6 +33,9 @@ class Backend:
 
         # 存储最新的优化后的偏置，用于IMU预积分
         self.latest_bias = gtsam.imuBias.ConstantBias()
+
+        # 记录优化误差，debug用
+        self.logger = Debugger(file_prefix="backend", column_names=["error"])
 
     # 关键帧id映射到图的id
     def _get_kf_gtsam_id(self, kf_id):
@@ -87,6 +91,41 @@ class Backend:
                 optimized_position = optimized_results.atPoint3(L(gtsam_id))
                 # 2. 调用对象的方法来更新其内部状态
                 landmark_obj.set_triangulated(optimized_position)
+
+    def remove_stale_landmarks(self, stale_lm_ids):
+        print(f"【Backend】: Receiving command to remove {len(stale_lm_ids)} stale landmarks.")
+        if not stale_lm_ids:
+            return
+        
+        stale_lm_ids = {gtsam.Symbol('l', self._get_lm_gtsam_id(lm_id)) for lm_id in stale_lm_ids}
+        graph = self.isam2.getFactorsUnsafe()
+        factor_indices_to_remove = []
+        stale_lm_keys = []
+        # print(f"【TEST】: {stale_lm_keys.keys()}")
+
+        for symbol_obj in stale_lm_ids:
+            stale_lm_keys.append(symbol_obj.key())
+
+        # 遍历图，找到需要删除的因子索引
+        for i in range(graph.size()):
+            factor = graph.at(i)
+            if factor:
+                for key in factor.keys():
+                    if key in stale_lm_keys:
+                        # print(f"🕵️‍ [Trace l{key}]: Found stale factor at index {i}")
+                        factor_indices_to_remove.append(i)
+                        break
+        
+        if factor_indices_to_remove:
+            empty_graph = gtsam.NonlinearFactorGraph()
+            empty_values = gtsam.Values()
+            self.isam2.update(empty_graph, empty_values, factor_indices_to_remove)
+            print(f"【Backend】: Removed {len(factor_indices_to_remove)} stale factors.")
+
+        # 删除路标点id映射
+        for lm_id in stale_lm_ids:
+            if lm_id in self.landmark_id_to_gtsam_id:
+                del self.landmark_id_to_gtsam_id[lm_id]
 
     def initialize_optimize(self, initial_keyframes, initial_imu_factors, initial_landmarks, initial_velocities, initial_bias):
         print("【Backend】: Initializing optimize...")
@@ -152,6 +191,9 @@ class Backend:
         self.isam2.update(graph, estimates)
         for _ in range(2): self.isam2.update()
         
+        # 记录优化误差
+        self._log_optimization_error(graph)
+
         # 更新最新bias
         _, _, latest_bias = self.get_latest_optimized_state()
         if latest_bias is not None:
@@ -181,55 +223,26 @@ class Backend:
             B(last_kf_gtsam_id), B(kf_gtsam_id), pim)
         new_graph.add(imu_factor)
 
-        # 添加新路标点顶点
+        # 添加新路标点顶点，注意这里添加的顶点只在new_estimates中还没有进入isam2的图
         for lm_id, lm_3d_pos in new_landmarks.items():
             lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
-            # 检查：1) 不在旧图中，2) 还没被添加过
+            # 检查：1) 不在旧图中，2) 还没被添加过 确保顶点只被添加一次
             if not self.isam2.getLinearizationPoint().exists(L(lm_gtsam_id)):
                 new_estimates.insert(L(lm_gtsam_id), lm_3d_pos)
         
         # 添加重投影因子，前面已经添加了新路标点顶点，所以这里只需要添加历史点和新特征点的观测帧重投影因子
         visual_factor_noise = gtsam.noiseModel.Isotropic.Sigma(2, 3.0)
+        current_isam_values = self.isam2.getLinearizationPoint()
         for kf_id, lm_id, pt_2d in new_visual_factors:
             kf_gtsam_id = self._get_kf_gtsam_id(kf_id)
             lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
 
-            kf_exists = self.isam2.getLinearizationPoint().exists(X(kf_gtsam_id))
-            lm_exists = self.isam2.getLinearizationPoint().exists(L(lm_gtsam_id))
+            kf_exists = current_isam_values.exists(X(kf_gtsam_id)) or new_estimates.exists(X(kf_gtsam_id))
+            lm_exists = current_isam_values.exists(L(lm_gtsam_id)) or new_estimates.exists(L(lm_gtsam_id))
 
             if kf_exists and lm_exists:
                 factor = gtsam.GenericProjectionFactorCal3_S2(pt_2d, visual_factor_noise, X(kf_gtsam_id), L(lm_gtsam_id), self.K, body_P_sensor=self.body_T_cam)
                 new_graph.add(factor)
-
-        # # 为新关键帧添加重投影因子
-        # for lm_id, pt_2d in zip(new_keyframe.get_visual_feature_ids(), new_keyframe.get_visual_features()):
-
-        #     if not self.check_landmark_health(lm_id, keyframe_window):
-        #         continue # 如果几何不好，就跳过这个因子，不添加
-
-        #     lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
-        #     if self.isam2.getLinearizationPoint().exists(L(lm_gtsam_id)) or lm_id in new_landmarks:
-        #         factor = gtsam.GenericProjectionFactorCal3_S2(pt_2d, visual_factor_noise, X(kf_gtsam_id), L(lm_gtsam_id), self.K, body_P_sensor=self.body_T_cam)
-        #         new_graph.add(factor)
-
-        # # 为关键帧窗口中的其他关键帧添加重投影因子，主要用于新三角化的路标点
-        # for lm_id in new_landmarks.keys():
-
-        #     if not self.check_landmark_health(lm_id, keyframe_window):
-        #         continue # 如果几何不好，就跳过这个因子，不添加
-
-        #     lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
-        #     for kf in keyframe_window:
-        #         # 跳过刚刚处理的新关键帧
-        #         if kf.get_id() == new_keyframe.get_id():
-        #             continue
-
-        #         kf_feature_map = {fid: feat for fid, feat in zip(kf.get_visual_feature_ids(), kf.get_visual_features())}
-        #         if lm_id in kf_feature_map:
-        #             pt_2d = kf_feature_map[lm_id]
-        #             kf_gtsam_id = self._get_kf_gtsam_id(kf.get_id())
-        #             factor = gtsam.GenericProjectionFactorCal3_S2(pt_2d, visual_factor_noise, X(kf_gtsam_id), L(lm_gtsam_id), self.K, body_P_sensor=self.body_T_cam)
-        #             new_graph.add(factor)
 
         # 执行iSAM2增量更新
         print(f"【Backend】: Updating iSAM2 ({new_graph.size()} new factors, {new_estimates.size()} new variables)...")
@@ -237,6 +250,9 @@ class Backend:
         # try:
         self.isam2.update(new_graph, new_estimates)
         for _ in range(2): self.isam2.update()
+
+        # 记录优化误差
+        self._log_optimization_error(new_graph)
 
         # except RuntimeError as e:
         #     print("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
@@ -248,3 +264,19 @@ class Backend:
         if latest_bias is not None:
             self.latest_bias = latest_bias
         print("【Backend】: Incremental optimization complete.")
+
+    def _log_optimization_error(self, new_factors_graph):
+        try:
+            optimized_result = self.isam2.calculateEstimate()
+            current_full_graph = self.isam2.getFactorsUnsafe()
+            total_error = current_full_graph.error(optimized_result)
+            new_factors_error = new_factors_graph.error(optimized_result)
+
+            print(f"【Backend】优化误差统计: "
+                  f"本轮新增因子误差 = {new_factors_error:.4f}, "
+                  f"当前图总误差 = {total_error:.4f}")
+            
+            self.logger.log(total_error)
+    
+        except Exception as e:
+            print(f"[Error][Backend] 计算优化误差时出错: {e}")
