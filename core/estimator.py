@@ -489,7 +489,6 @@ class Estimator(threading.Thread):
             print(f"【Estimator】: No IMU factors between KF {last_kf.get_id()} and KF {new_kf.get_id()}.")
             return
 
-        print(f"【Tracking】: IMU measurements between KF {last_kf.get_id()} and KF {new_kf.get_id()}: {imu_factor_data['imu_measurements']}")
         is_currently_stationary = self.is_stationary(imu_factor_data['imu_measurements']) # 零速检查
 
         # 从后端获取最新的优化结果

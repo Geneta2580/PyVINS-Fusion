@@ -12,7 +12,7 @@ class Backend:
 
         # 使用 iSAM2 作为优化器
         parameters = gtsam.ISAM2Params()
-        parameters.setRelinearizeThreshold(0.1) 
+        parameters.setRelinearizeThreshold(0.01) 
         parameters.relinearizeSkip = 1
         self.isam2 = gtsam.ISAM2(parameters)
         
@@ -99,12 +99,12 @@ class Backend:
         if not stale_lm_ids:
             return
         
-        stale_lm_ids = {gtsam.Symbol('l', self._get_lm_gtsam_id(lm_id)) for lm_id in stale_lm_ids}
+        stale_symbol_ids = {gtsam.Symbol('l', self._get_lm_gtsam_id(lm_id)) for lm_id in stale_lm_ids}
         graph = self.isam2.getFactorsUnsafe()
         factor_indices_to_remove = []
         stale_lm_keys = []
 
-        for symbol_obj in stale_lm_ids:
+        for symbol_obj in stale_symbol_ids:
             stale_lm_keys.append(symbol_obj.key())
 
         # 遍历图，找到需要删除的因子索引
