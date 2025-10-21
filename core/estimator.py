@@ -203,6 +203,60 @@ class Estimator(threading.Thread):
     
         return newly_triangulated_for_backend
             
+    
+    # 审计地图，移除所有变得不健康的坏点
+    def audit_map_after_optimization(self):
+        landmarks_to_remove = []
+        # 遍历所有已三角化的路标点
+        for lm_id in self.local_map.get_active_landmarks().keys():
+            # 使用同一个健康检查函数进行“年检”
+            # is_healthy = self.local_map.check_landmark_health(lm_id)
+            is_depth_ok = self.local_map.check_landmark_depth(lm_id)
+            if not is_depth_ok:
+                landmarks_to_remove.append(lm_id)
+        
+        if landmarks_to_remove:
+            print(f"【Audit】: Removing {len(landmarks_to_remove)} landmarks that became unhealthy after optimization: {landmarks_to_remove}")
+            # 从LocalMap中删除
+            for lm_id in landmarks_to_remove:
+                if lm_id in self.local_map.landmarks:
+                    del self.local_map.landmarks[lm_id]
+
+            self.backend.remove_stale_landmarks(landmarks_to_remove)
+    
+    # 零速检查
+    def is_stationary(self, imu_measurements_between_kfs):
+        if len(imu_measurements_between_kfs) < 10: # 至少需要一些样本
+            return False
+
+        # 提取所有的加速度和角速度读数
+        accel_list = [m[1].accel.astype(np.float64) for m in imu_measurements_between_kfs]
+        gyro_list = [m[1].gyro.astype(np.float64) for m in imu_measurements_between_kfs]
+
+        try:
+            accels = np.array(accel_list, dtype=np.float64)         
+            gyros = np.array(gyro_list, dtype=np.float64)
+        except ValueError:
+            print("【Stationary Check】: Failed to convert IMU measurements to numpy arrays.")
+            return False
+
+        # 计算加速度和角速度在每个轴上的标准差
+        accel_std = np.std(accels, axis=0)
+        gyro_std = np.std(gyros, axis=0)
+
+        # 从config中读取阈值
+        accel_std_threshold = self.config.get('stationary_accel_std_threshold', 0.1) # m/s^2
+        gyro_std_threshold = self.config.get('stationary_gyro_std_threshold', 0.05) # rad/s
+
+        # 如果所有轴的波动都小于阈值，则认为是静止
+        is_still = np.all(accel_std < accel_std_threshold) and np.all(gyro_std < gyro_std_threshold)
+
+        if is_still:
+            print("【Stationary Check】: System is stationary.")
+            
+        return is_still
+
+
     def visual_inertial_initialization(self):
         print("【Init】: Buffer is full. Starting initialization process.")
 
@@ -435,6 +489,9 @@ class Estimator(threading.Thread):
             print(f"【Estimator】: No IMU factors between KF {last_kf.get_id()} and KF {new_kf.get_id()}.")
             return
 
+        print(f"【Tracking】: IMU measurements between KF {last_kf.get_id()} and KF {new_kf.get_id()}: {imu_factor_data['imu_measurements']}")
+        is_currently_stationary = self.is_stationary(imu_factor_data['imu_measurements']) # 零速检查
+
         # 从后端获取最新的优化结果
         last_pose, last_vel, last_bias = self.backend.get_latest_optimized_state()
         if last_pose is None:
@@ -472,7 +529,7 @@ class Estimator(threading.Thread):
             if lm:
                 # DEBUG
                 if lm_id == suspect_lm_id:
-                    print(f"🕵️‍ [Trace l{suspect_lm_id}]: PASSED health check. Adding its factors...")
+                    print(f"🕵️‍ [Trace l{suspect_lm_id}]: As new landmark. PASSED health check. Adding its factors...")
                 # DEBUG
                 for obs_kf_id, obs_pt_2d in lm.observations.items():
                     # 指令格式: (关键帧ID, 路标点ID, 2D观测坐标)
@@ -488,7 +545,8 @@ class Estimator(threading.Thread):
                 if lm_id in self.local_map.landmarks:
                     # DEBUG
                     if lm_id == suspect_lm_id:
-                        print(f"🕵️‍ [Trace l{suspect_lm_id}]: PASSED health check. Adding its factors...")
+                        print(f"🕵️‍ [Trace l{suspect_lm_id}]: As old landmark. PASSED health check. Adding its factors...")
+                        # print(f"🕵️‍ [Trace l{suspect_lm_id}]: lm}")
                     # DEBUG
                     visual_factors_to_add.append((new_kf.get_id(), lm_id, pt_2d))
 
@@ -503,10 +561,14 @@ class Estimator(threading.Thread):
             new_landmarks=new_landmarks,
             new_visual_factors=visual_factors_to_add,
             initial_state_guess=(predicted_T_wb, predicted_vel, last_bias),
+            is_stationary=is_currently_stationary,
         )
 
         # 优化结束，同步后端结果到Estimator
         self.backend.update_estimator_map(active_kfs, self.local_map.landmarks)
+        
+        # 审计地图，移除所有变得不健康的“坏苹果”
+        self.audit_map_after_optimization()
         
         # 更新预积分器的零偏
         _, _, latest_bias = self.backend.get_latest_optimized_state()

@@ -61,6 +61,7 @@ class Backend:
             pose = result.atPose3(X(latest_gtsam_id))
             velocity = result.atVector(V(latest_gtsam_id))
             bias = result.atConstantBias(B(latest_gtsam_id))
+            print(f"【Backend】: Latest optimized state: pose: {pose.matrix()}, velocity: {velocity}, bias: {bias}")
             return pose, velocity, bias
         except Exception as e:
             print(f"[Error][Backend] Failed to retrieve latest state for gtsam_id {latest_gtsam_id}: {e}")
@@ -91,6 +92,7 @@ class Backend:
                 optimized_position = optimized_results.atPoint3(L(gtsam_id))
                 # 2. 调用对象的方法来更新其内部状态
                 landmark_obj.set_triangulated(optimized_position)
+                print(f"【Backend】: Updated landmark {lm_id} to {optimized_position}")
 
     def remove_stale_landmarks(self, stale_lm_ids):
         print(f"【Backend】: Receiving command to remove {len(stale_lm_ids)} stale landmarks.")
@@ -101,7 +103,6 @@ class Backend:
         graph = self.isam2.getFactorsUnsafe()
         factor_indices_to_remove = []
         stale_lm_keys = []
-        # print(f"【TEST】: {stale_lm_keys.keys()}")
 
         for symbol_obj in stale_lm_ids:
             stale_lm_keys.append(symbol_obj.key())
@@ -202,7 +203,7 @@ class Backend:
 
 
     def optimize_incremental(self, last_keyframe, new_keyframe, new_imu_factors, 
-                            new_landmarks, new_visual_factors, initial_state_guess):
+                            new_landmarks, new_visual_factors, initial_state_guess, is_stationary):
 
         new_graph = gtsam.NonlinearFactorGraph()
         new_estimates = gtsam.Values()
@@ -243,6 +244,14 @@ class Backend:
             if kf_exists and lm_exists:
                 factor = gtsam.GenericProjectionFactorCal3_S2(pt_2d, visual_factor_noise, X(kf_gtsam_id), L(lm_gtsam_id), self.K, body_P_sensor=self.body_T_cam)
                 new_graph.add(factor)
+
+        if is_stationary:
+            # 创建一个非常强的先验因子，将当前帧的速度“钉死”在0，ZUPT约束
+            kf_gtsam_id = self._get_kf_gtsam_id(new_keyframe.get_id())
+            zero_velocity_noise = gtsam.noiseModel.Isotropic.Sigma(3, 1e-4) # 噪声非常小=约束非常强
+            zero_velocity_prior = gtsam.PriorFactorVector(V(kf_gtsam_id), np.zeros(3), zero_velocity_noise)
+            new_graph.add(zero_velocity_prior)
+            print("【Backend】: Added Zero-Velocity-Update (ZUPT) factor.")
 
         # 执行iSAM2增量更新
         print(f"【Backend】: Updating iSAM2 ({new_graph.size()} new factors, {new_estimates.size()} new variables)...")
