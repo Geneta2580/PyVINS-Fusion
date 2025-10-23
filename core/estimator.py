@@ -1,3 +1,4 @@
+from symbol import factor
 import gtsam
 import numpy as np
 import threading
@@ -14,6 +15,24 @@ from .viewer import Viewer3D
 from .vio_initializer import VIOInitializer
 
 
+def check_orthogonality(matrix, matrix_name):
+    """检查3x3旋转矩阵的正交性"""
+    R = matrix[:3, :3]
+    # 计算 R' * R - I
+    identity = np.eye(3)
+    error_matrix = np.dot(R.T, R) - identity
+    # 计算误差矩阵的范数，如果接近0，则说明是正交的
+    error_norm = np.linalg.norm(error_matrix)
+    
+    is_orthogonal = np.allclose(error_norm, 0)
+    
+    if not is_orthogonal:
+        print(f"🕵️‍ [Orthogonality Check] {matrix_name} FAILED! Error Norm: {error_norm:.6f}")
+    else:
+        print(f"✅ [Orthogonality Check] {matrix_name} PASSED. Error Norm: {error_norm:.6f}")
+    
+    return is_orthogonal
+
 class Estimator(threading.Thread):
     """
     The central coordinator for the SLAM system. Runs as a consumer thread.
@@ -27,7 +46,7 @@ class Estimator(threading.Thread):
         self.imu_processor = IMUProcessor(config)
         self.imu_buffer = []
 
-        self.backend = Backend(global_central_map, config, self.imu_processor)
+        self.backend = Backend(global_central_map, config)
 
         # 读取相机内参
         cam_intrinsics_raw = self.config.get('cam_intrinsics', np.eye(3).flatten().tolist())
@@ -45,6 +64,7 @@ class Estimator(threading.Thread):
         self.gravity_magnitude = self.config.get('gravity', 9.81)
         T_bc_raw = self.config.get('T_bc', np.eye(4).flatten().tolist())
         self.T_bc = np.asarray(T_bc_raw).reshape(4, 4)
+        self.T_cb = gtsam.Pose3(self.T_bc).inverse()
 
         # 可视化test
         self.viewer_queue = viewer_queue
@@ -78,7 +98,6 @@ class Estimator(threading.Thread):
 
                 # 接收视觉特征点数据
                 elif 'visual_features' in package:
-                    timestamp = package['timestamp']
                     visual_features = package['visual_features']
                     feature_ids = package['feature_ids']
                     image = package['image']
@@ -89,29 +108,25 @@ class Estimator(threading.Thread):
                     new_kf.set_image(image)
 
                     self.next_kf_id += 1
-                    stale_lm_ids = self.local_map.add_keyframe(new_kf)
+                    self.local_map.add_keyframe(new_kf)
 
-                    if stale_lm_ids:
-                        self.backend.remove_stale_landmarks(stale_lm_ids)
-
-                    active_keyframes = self.local_map.get_active_keyframes()
-
+                    # 视觉惯性初始化
                     if not self.is_initialized:
+                        active_keyframes = self.local_map.get_active_keyframes()
                         if len(active_keyframes) == self.init_window_size:
                             self.visual_inertial_initialization()
-                        
                         else:
                             print(f"【Init】: Collecting frames... {len(active_keyframes)}/{self.init_window_size}")
                     else:
                         # pass
-                        self.process_package_data(new_kf)
+                        self.process_new_keyframe(new_kf)
 
             except queue.Empty:
                 continue
         
         print("【Estimator】thread has finished.")
 
-    def create_imu_factors(self, kf_start, kf_end):
+    def create_imu_factors(self, kf_start, kf_end, latest_bias):
         start_ts = kf_start.get_timestamp()
         end_ts = kf_end.get_timestamp()
 
@@ -125,22 +140,22 @@ class Estimator(threading.Thread):
             print(f"【Estimator】: No IMU measurements between KF {kf_start.get_id()} and KF {kf_end.get_id()}.")
             return None
 
-        imu_preintegration = self.imu_processor.pre_integration(measurements_with_ts, start_ts, end_ts)
+        imu_preintegration = self.imu_processor.pre_integration(measurements_with_ts, start_ts, end_ts, latest_bias)
 
         if imu_preintegration:
             return {
                 'start_kf_timestamp': start_ts,
                 'end_kf_timestamp': end_ts,
                 'imu_measurements': measurements_with_ts,
-                'imu_preintegration': imu_preintegration
+                'start_kf_id': kf_start.get_id(),
+                'end_kf_id': kf_end.get_id(),
+                'imu_preintegration': imu_preintegration,
             }
-
-        return None
+        else:
+            return None
         
-    # TODO:def check_motion_excitement(self):
-
-    def triangulate_new_landmarks(self, new_kf):
-        newly_triangulated_for_backend = {}
+    def triangulate_new_landmarks(self):
+        new_triangulated_landmarks = {}
         keyframe_window = self.local_map.get_active_keyframes()
         # DEBUG
         suspect_lm_id = 5311
@@ -158,6 +173,7 @@ class Estimator(threading.Thread):
                 print(f"🕵️‍ [Trace l{suspect_lm_id}]: PASSED triangulation check (ready). Using KF {first_kf.get_id()} and KF {last_kf.get_id()}.")
             # DEBUG
             
+            # 检查是否能够晋升为正式landmark，通过观测的第一帧和最后一帧（last很可能是新加入的）
             if is_ready:
                 pose1 = first_kf.get_global_pose()
                 pose2 = last_kf.get_global_pose()
@@ -181,10 +197,12 @@ class Estimator(threading.Thread):
                         print(f"🕵️‍ [Trace l{suspect_lm_id}]: TRIANGULATED successfully to position {points_3d_world}.")
                     # DEBUG
 
+                    # 检查是否满足视差角要求
                     is_healthy = self.local_map.check_landmark_health(lm.id, points_3d_world)
                     if is_healthy:
+                        # 晋升为正式landmark
                         lm.set_triangulated(points_3d_world)
-                        newly_triangulated_for_backend[lm.id] = points_3d_world
+                        new_triangulated_landmarks[lm.id] = points_3d_world
                         # DEBUG
                         if lm.id == suspect_lm_id:
                             print(f"🕵️‍ [Trace l{suspect_lm_id}]: PASSED health check. Adding its factors...")
@@ -201,7 +219,7 @@ class Estimator(threading.Thread):
                     if lm.id == suspect_lm_id:
                             print(f"🕵️‍ [Trace l{suspect_lm_id}]: FAILED multi-view validation after triangulation.")
     
-        return newly_triangulated_for_backend
+        return new_triangulated_landmarks
             
     def visual_inertial_initialization(self):
         print("【Init】: Buffer is full. Starting initialization process.")
@@ -220,7 +238,8 @@ class Estimator(threading.Thread):
         for i in range(len(initial_keyframes) - 1):
             kf_start = initial_keyframes[i]
             kf_end = initial_keyframes[i + 1]
-            imu_factors = self.create_imu_factors(kf_start, kf_end)
+            # 第一次跟踪时，直接使用imu_processor的初始bias
+            imu_factors = self.create_imu_factors(kf_start, kf_end, None)
             if imu_factors:
                 initial_imu_factors.append(imu_factors)
 
@@ -257,55 +276,66 @@ class Estimator(threading.Thread):
             print(f"【Init】: Re-triangulation complete. Final map has {len(self.local_map.landmarks)} landmarks.")
             print("【Init】: Alignment successful. Calling backend to build initial graph...")
 
-            # 更新IMU偏置
+            # 准备初始优化的变量
+            initial_keyframes = self.local_map.get_active_keyframes()
+            active_landmarks = self.local_map.get_active_landmarks()
+
+            # 更新IMUProcessor的当前bias
             initial_bias_obj = gtsam.imuBias.ConstantBias(np.zeros(3), gyro_bias)
             self.imu_processor.update_bias(initial_bias_obj)
             
-            # test
-            poses = {kf.get_id(): kf.get_global_pose() for kf in initial_keyframes if kf.get_global_pose() is not None}
-            for kf_id, pose in poses.items():
-                print(f"【Init】: Before optimization. kf_id: {kf_id}, pose: {pose[:3, 3]}")
-            # test
+            # IMU因子
+            initial_imu_factors = []
+            for i in range(len(initial_keyframes) - 1):
+                factor = self.create_imu_factors(initial_keyframes[i], initial_keyframes[i + 1], initial_bias_obj)
+                if factor:
+                    initial_imu_factors.append(factor)
+
+            # 初始状态猜测
+            initial_guesses = {}
+            for i, kf in enumerate(initial_keyframes):
+                initial_guesses[kf.get_id()] = (kf.get_global_pose(), velocities[i*3 : i*3+3], initial_bias_obj)
 
             # 进行初始优化
-            self.backend.initialize_optimize(
-                self.local_map.get_active_keyframes(),
-                initial_imu_factors, 
-                self.local_map.get_active_landmarks(), 
-                velocities, initial_bias_obj
+            success = self.backend.optimize(
+                keyframe_window=initial_keyframes,
+                imu_factors=initial_imu_factors, 
+                active_landmarks=active_landmarks, 
+                initial_state_guess=initial_guesses
             )
 
-            # 初始优化结束，同步后端结果到Estimator
-            self.backend.update_estimator_map(
-                self.local_map.get_active_keyframes(),
-                self.local_map.landmarks
-            )
-            self.is_initialized = True
+            if success:
+                self.is_initialized = True
+                print("【Init】: Initialization successful and initial graph optimized.")
 
-            # viewer可视化
-            if self.viewer_queue:
-                print("【Init】: Sending initialization result to viewer queue...")
+                # viewer可视化
+                if self.viewer_queue:
+                    print("【Tracking】: Sending tracking result to viewer queue...")
 
-                # 从 local_map 中获取最新的、优化后的位姿和路标点数据
-                active_kfs = self.local_map.get_active_keyframes()
-                poses = {kf.get_id(): kf.get_global_pose() for kf in active_kfs if kf.get_global_pose() is not None}
-                
-                # 调用 LocalMap 的辅助函数来获取纯粹的位置字典
-                landmarks_positions = self.local_map.get_active_landmarks()
+                    # 从 local_map 中获取最新的、优化后的位姿和路标点数据
+                    active_kfs = self.local_map.get_active_keyframes()
+                    poses = {kf.get_id(): kf.get_global_pose() for kf in active_kfs if kf.get_global_pose() is not None}
+                    
+                    # 【核心修正】调用 LocalMap 的辅助函数来获取纯粹的位置字典
+                    active_landmarks_objects = self.local_map.get_active_landmarks()
 
-                vis_data = {
-                    'landmarks': landmarks_positions,
-                    'poses': poses
-                }
-                
-                # 打印一些信息以供调试
-                print(f"【Viewer】: Sending {len(poses)} poses and {len(landmarks_positions)} landmarks to viewer.")
+                    landmarks_positions = {lm_id: lm_obj.get_position() for lm_id, lm_obj in active_landmarks_objects.items() if lm_obj.get_position() is not None}
 
-                try:
-                    self.viewer_queue.put_nowait(vis_data)
-                except queue.Full:
-                    print("【Estimator】: Viewer queue is full, skipping visualization data.")
-            # viewer可视化
+                    vis_data = {
+                        'landmarks': landmarks_positions,
+                        'poses': poses
+                    }
+                    
+                    # 打印一些信息以供调试
+                    print(f"【Viewer】: Sending {len(poses)} poses and {len(landmarks_positions)} landmarks to viewer.")
+
+                    try:
+                        self.viewer_queue.put_nowait(vis_data)
+                    except queue.Full:
+                        print("【Estimator】: Viewer queue is full, skipping visualization data.")
+                # viewer可视化
+            else:
+                print("【Init】: Backend optimization failed during initialization.")
             
         else:
             print("【Init】: V-I Alignment failed.")
@@ -422,117 +452,124 @@ class Estimator(threading.Thread):
         
         return True, ref_kf, curr_kf, ids_best, p1_best, p2_best
 
-    def process_package_data(self, new_kf):
+    def process_new_keyframe(self, new_kf):
         active_kfs = self.local_map.get_active_keyframes()
         if len(active_kfs) < 2:
             return
 
+        # 获取上一帧的位姿、速度、偏置
         last_kf = active_kfs[-2]
+        last_pose_mat, last_vel, last_bias = last_kf.get_global_pose(), last_kf.get_velocity(), last_kf.get_bias()
+        # last_pose_gtsam = gtsam.Pose3(last_pose_mat).compose(self.T_cb)
+        
+        # 净化Pose矩阵的代码
+        last_R_mat = last_pose_mat[:3, :3]
+        last_t_vec = last_pose_mat[:3, 3]
+        last_rot = gtsam.Rot3(last_R_mat)
+        last_pos = gtsam.Point3(last_t_vec)
+        last_pose_gtsam_wc = gtsam.Pose3(last_rot, last_pos)
+
+        last_pose_gtsam_wb = last_pose_gtsam_wc.compose(self.T_cb)
 
         # 创建上一帧到当前帧的IMU因子
-        imu_factor_data = self.create_imu_factors(last_kf, new_kf)
+        imu_factor_data = self.create_imu_factors(last_kf, new_kf, last_bias)
         if not imu_factor_data:
             print(f"【Estimator】: No IMU factors between KF {last_kf.get_id()} and KF {new_kf.get_id()}.")
             return
 
-        # 从后端获取最新的优化结果
-        last_pose, last_vel, last_bias = self.backend.get_latest_optimized_state()
-        if last_pose is None:
-            print(f"[Warning] Could not retrieve last state from backend. Skipping KF {new_kf.get_id()}.")
-            return
-
         # 使用当前帧的预积分来预测当前帧状态
         pim = imu_factor_data['imu_preintegration']
-        predicted_nav_state = pim.predict(gtsam.NavState(last_pose, last_vel), last_bias)
+        predicted_nav_state = pim.predict(gtsam.NavState(last_pose_gtsam_wb, last_vel), last_bias)
 
         predicted_T_wb = predicted_nav_state.pose()
         predicted_T_wc = predicted_T_wb.compose(gtsam.Pose3(self.T_bc))
         predicted_vel = predicted_nav_state.velocity()
 
-        # 设置临时预测位姿
+        # 创建临时预测
         new_kf.set_global_pose(predicted_T_wc.matrix())
+        new_kf.set_velocity(predicted_vel)
+        new_kf.set_bias(last_bias)
 
-        # 进行新特征点三角化
-        new_landmarks = self.triangulate_new_landmarks(new_kf)
-        if new_landmarks:
-            print(f"【Tracking】: Triangulated {len(new_landmarks)} new landmarks.")
+        # 进行特征点延迟三角化
+        #【错误点修正】不应该在优化前，使用一个纯粹靠IMU预测的、未经视觉信息约束的位姿来进行三角化
+        # new_landmarks = self.triangulate_new_landmarks()
+        # if new_landmarks:
+        #     print(f"【Estimator】: Triangulated {len(new_landmarks)} new landmarks.")
 
-        # DEBUG
-        suspect_lm_id = 5311
-        # DEBUG
-        
-        # 为后端准备重投影因子
-        visual_factors_to_add = []
-        for lm_id in new_landmarks.keys():
-            # DEBUG
-            if lm_id == suspect_lm_id:
-                print(f"🕵️‍ [Trace l{suspect_lm_id}]: Is newly triangulated. Preparing its factors...")
-            # DEBUG
-            lm = self.local_map.landmarks.get(lm_id)
-            if lm:
-                # DEBUG
-                if lm_id == suspect_lm_id:
-                    print(f"🕵️‍ [Trace l{suspect_lm_id}]: PASSED health check. Adding its factors...")
-                # DEBUG
-                for obs_kf_id, obs_pt_2d in lm.observations.items():
-                    # 指令格式: (关键帧ID, 路标点ID, 2D观测坐标)
-                    visual_factors_to_add.append((obs_kf_id, lm_id, obs_pt_2d))
-                    if lm_id == suspect_lm_id:
-                        print(f"🕵️‍ [Trace l{suspect_lm_id}]: OBSERVED by new KF {obs_kf_id}. observation point: {obs_pt_2d}")
-                        # print(f"🕵️‍ [Trace l{suspect_lm_id}]: OBSERVED by new KF {obs_kf_id}. observation point: {obs_pt_2d}")
+        # 准备优化所需的所有数据
+        keyframe_window = self.local_map.get_active_keyframes()
+        active_landmarks = self.local_map.get_active_landmarks()
 
-        # 添加旧点重投影因子 (不在新三角化列表里)
-        for lm_id, pt_2d in zip(new_kf.get_visual_feature_ids(), new_kf.get_visual_features()):
-            if lm_id not in new_landmarks:
-                # 必须是活跃点 (没有被剔除)
-                if lm_id in self.local_map.landmarks:
-                    # DEBUG
-                    if lm_id == suspect_lm_id:
-                        print(f"🕵️‍ [Trace l{suspect_lm_id}]: PASSED health check. Adding its factors...")
-                    # DEBUG
-                    visual_factors_to_add.append((new_kf.get_id(), lm_id, pt_2d))
+        # 创建所有IMU因子
+        imu_factors = []
+        for i in range(len(keyframe_window) - 1):
+            kf_start = keyframe_window[i]
+            kf_end = keyframe_window[i + 1]
+            
+            # 这里使用每段积分开头的KF的bias作为该段积分的bias
+            start_kf_bias = kf_start.get_bias()
+            # 处理第一次跟踪时，旧帧可能没有bias的情况
+            if start_kf_bias is None:
+                start_kf_bias = self.imu_processor.current_bias # 使用IMUProcessor的当前bias作为备用
+            
+            imu_factor = self.create_imu_factors(kf_start, kf_end, start_kf_bias)
+            if imu_factor:
+                imu_factors.append(imu_factor)
 
-        print(f"【Debug】: Newly triangulated landmarks count: {len(new_landmarks)}")
-        print(f"【Debug】: Factor instructions generated: {len(visual_factors_to_add)}")
+        # 设置初始状态猜测
+        initial_guesses = {}
+        for kf in keyframe_window:
+            if kf.get_id() == new_kf.get_id():
+                initial_guesses[kf.get_id()] = (predicted_T_wc.matrix(), predicted_vel, last_bias)
+            else:
+                initial_guesses[kf.get_id()] = (kf.get_global_pose(), kf.get_velocity(), kf.get_bias())
 
         # 将预测结果作为初始估计值以及重投影约束、IMU约束送入后端
-        self.backend.optimize_incremental(
-            last_keyframe=last_kf,
-            new_keyframe=new_kf,
-            new_imu_factors=imu_factor_data,
-            new_landmarks=new_landmarks,
-            new_visual_factors=visual_factors_to_add,
-            initial_state_guess=(predicted_T_wb, predicted_vel, last_bias),
+        success = self.backend.optimize(
+            keyframe_window=keyframe_window,
+            imu_factors=imu_factors,
+            active_landmarks=active_landmarks,
+            initial_state_guess=initial_guesses
         )
 
-        # 优化结束，同步后端结果到Estimator
-        self.backend.update_estimator_map(active_kfs, self.local_map.landmarks)
-        
-        # 更新预积分器的零偏
-        _, _, latest_bias = self.backend.get_latest_optimized_state()
-        if latest_bias:
-            self.imu_processor.update_bias(latest_bias)
-
-        # viewer可视化
-        if self.viewer_queue:
-            print("【Tracking】: Sending tracking result to viewer queue...")
-
-            # 从 local_map 中获取最新的、优化后的位姿和路标点数据
-            active_kfs = self.local_map.get_active_keyframes()
-            poses = {kf.get_id(): kf.get_global_pose() for kf in active_kfs if kf.get_global_pose() is not None}
+        if success:
+            print(f"【Estimator】: Optimization successful for KF {new_kf.get_id()}.")
             
-            # 【核心修正】调用 LocalMap 的辅助函数来获取纯粹的位置字典
-            landmarks_positions = self.local_map.get_active_landmarks()
+            #【时机修正】在优化运行成功之后，KF的位姿已经更新，此时进行三角化更准确
+            new_landmarks = self.triangulate_new_landmarks()
+            if new_landmarks:
+                print(f"【Estimator】: Triangulated {len(new_landmarks)} new landmarks.")
 
-            vis_data = {
-                'landmarks': landmarks_positions,
-                'poses': poses
-            }
+            # 使用优化后的最后一帧bias作为最新的bias
+            latest_kf = self.local_map.get_active_keyframes()[-1]
+            self.imu_processor.update_bias(latest_kf.get_bias())
+
+            # viewer可视化
+            if self.viewer_queue:
+                print("【Tracking】: Sending tracking result to viewer queue...")
+
+                # 从 local_map 中获取最新的、优化后的位姿和路标点数据
+                active_kfs = self.local_map.get_active_keyframes()
+                poses = {kf.get_id(): kf.get_global_pose() for kf in active_kfs if kf.get_global_pose() is not None}
+                
+                # 【核心修正】调用 LocalMap 的辅助函数来获取纯粹的位置字典
+                active_landmarks_objects = self.local_map.get_active_landmarks()
+
+                landmarks_positions = {lm_id: lm_obj.get_position() for lm_id, lm_obj in active_landmarks_objects.items() if lm_obj.get_position() is not None}
+
+                vis_data = {
+                    'landmarks': landmarks_positions,
+                    'poses': poses
+                }
+                
+                # 打印一些信息以供调试
+                print(f"【Viewer】: Sending {len(poses)} poses and {len(landmarks_positions)} landmarks to viewer.")
+
+                try:
+                    self.viewer_queue.put_nowait(vis_data)
+                except queue.Full:
+                    print("【Estimator】: Viewer queue is full, skipping visualization data.")
+            # viewer可视化
             
-            # 打印一些信息以供调试
-            print(f"【Viewer】: Sending {len(poses)} poses and {len(landmarks_positions)} landmarks to viewer.")
-
-            try:
-                self.viewer_queue.put_nowait(vis_data)
-            except queue.Full:
-                print("【Estimator】: Viewer queue is full, skipping visualization data.")
+        else:
+            print(f"【Estimator】: Optimization failed for KF {new_kf.get_id()}.")

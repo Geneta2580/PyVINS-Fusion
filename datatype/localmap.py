@@ -68,8 +68,8 @@ class LocalMap:
         return sorted(self.keyframes.values(), key=lambda kf: kf.get_id())
     
     def get_active_landmarks(self):
-        return {lm.id: lm.position_3d for lm in self.landmarks.values() if lm.status == LandmarkStatus.TRIANGULATED}
-
+        return {lm_id: lm_obj for lm_id, lm_obj in self.landmarks.items() if lm_obj.status == LandmarkStatus.TRIANGULATED}
+        
     def get_candidate_landmarks(self):
         return [lm for lm in self.landmarks.values() if lm.status == LandmarkStatus.CANDIDATE]
 

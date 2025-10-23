@@ -32,6 +32,12 @@ class Landmark:
     def get_observation(self, kf_id):
         return self.observations[kf_id]
 
+    def get_all_observations(self):
+        return self.observations
+
+    def get_position(self):
+        return self.position_3d
+
     def set_triangulated(self, position_3d):
         self.position_3d = position_3d
         self.status = LandmarkStatus.TRIANGULATED

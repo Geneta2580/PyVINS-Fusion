@@ -7,8 +7,10 @@ class KeyFrame:
 
         self.image = None
         self.local_pose = None 
-        self.global_pose = None
+        self.global_pose = None # T_w_c
         self.point_cloud = None
+        self.velocity = None  # 这里的速度是body系的
+        self.bias = None
 
         self.visual_features = None
         self.visual_feature_ids = None
@@ -30,6 +32,12 @@ class KeyFrame:
     def set_point_cloud(self, point_cloud, color):
         self.point_cloud = point_cloud
         self.color = color
+    
+    def set_velocity(self, velocity):
+        self.velocity = velocity
+
+    def set_bias(self, bias):
+        self.bias = bias
 
     # 读取类信息(read)
     def get_id(self):
@@ -56,3 +64,8 @@ class KeyFrame:
     def get_visual_feature_ids(self):
         return self.visual_feature_ids
     
+    def get_velocity(self):
+        return self.velocity
+
+    def get_bias(self):
+        return self.bias

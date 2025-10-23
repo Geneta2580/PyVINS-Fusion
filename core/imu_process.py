@@ -26,7 +26,7 @@ class IMUProcessor:
         self.params.setBiasOmegaCovariance(np.eye(3) * gyro_bias_rw_sigma**2) # 陀螺零偏随机游走
         self.params.setBiasAccOmegaInit(np.eye(6) * 1e-4) # 加计和陀螺零偏初始协方差
 
-        self.current_bias = gtsam.imuBias.ConstantBias()
+        self.current_bias = gtsam.imuBias.ConstantBias(np.zeros(3), np.zeros(3)) # 初始化前假设全为零
 
     @staticmethod
     def get_imu_interval_with(imu_buffer_deque: deque, end_time: float) -> Tuple[List[ImuData], deque]:
