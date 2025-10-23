@@ -4,6 +4,7 @@
 # 数据集根目录的路径
 # euroc：/home/pangjunxiang/dataset/Euroc/MH_01_easy
 # tum：/home/pangjunxiang/dataset/TUM/freiburg1
+# kitti:
 dataset_path: "/home/geneta/dataset/MH_01_EASY"
 
 # 支持euroc和tum数据集
@@ -48,10 +49,10 @@ visualize: True
 gravity: 9.81
 
 # 注意这里只是sigma，不是sigma^2
-accel_noise_sigma: 0.1
-gyro_noise_sigma: 0.01
-accel_bias_rw_sigma: 0.001 # 零偏随机游走
-gyro_bias_rw_sigma: 0.001
+accel_noise_sigma: 0.01
+gyro_noise_sigma: 0.001
+accel_bias_rw_sigma: 0.0001 # 零偏随机游走
+gyro_bias_rw_sigma: 0.0001
 
 # 初始化窗口大小
 init_window_size: 10

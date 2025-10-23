@@ -5,6 +5,9 @@ Initializing SLAM components and communication queues...
 【Dataloader】: Loaded 36820 IMU records
 【Dataloader】: Dataloader initialized with 40502 total events
 【Logger】Logging to output/backend_20251023_173809.csv
+【Logger】Logging to output/backend_state_20251022_143141.csv
+【Debugger】: Log file initialized at output/backend_state_20251022_143141.csv with columns ['gtsam_id', 'pos_x', 'pos_y', 'pos_z', 'vel_x', 'vel_y', 'vel_z', 'bias_acc_x', 'bias_acc_y', 'bias_acc_z', 'bias_gyro_x', 'bias_gyro_y', 'bias_gyro_z', 'total_error', 'new_factors_error']
+【Debugger】成功初始化轨迹文件: output/estimated_trajectory.txt
 Starting all SLAM threads...
 Visual Feature Tracker thread started.
 【FeatureTracker】Image data: /home/geneta/dataset/MH_01_EASY/image/data/1403636579763555584.png
@@ -145,6 +148,137 @@ bias: acc = -0.000144804   0.00137353   -0.0001425 gyro = -0.00878139   0.015445
 【Backend】: Syncing optimized results back to Estimator complete.
 【Init】: Initialization successful and initial graph optimized.
 【Tracking】: Sending tracking result to viewer queue...
+【Init】: Before optimization. kf_id: 0, pose: [0. 0. 0.]
+【Init】: Before optimization. kf_id: 1, pose: [ 0.00028783 -0.00164258 -0.01692336]
+【Init】: Before optimization. kf_id: 2, pose: [ 0.00126192 -0.00238259 -0.03744806]
+【Init】: Before optimization. kf_id: 3, pose: [ 0.00272598 -0.00247637 -0.06074829]
+【Init】: Before optimization. kf_id: 4, pose: [ 0.0050297  -0.00190029 -0.08595181]
+【Init】: Before optimization. kf_id: 5, pose: [ 0.00694239 -0.00092691 -0.11254828]
+【Init】: Before optimization. kf_id: 6, pose: [ 8.59727749e-03  7.57698318e-05 -1.39997168e-01]
+【Init】: Before optimization. kf_id: 7, pose: [ 0.01011852  0.0008606  -0.16650711]
+【Init】: Before optimization. kf_id: 8, pose: [ 0.01243499  0.00222944 -0.19216447]
+【Init】: Before optimization. kf_id: 9, pose: [ 0.01377592  0.00344327 -0.21688412]
+【Backend】: Initializing optimize...
+【Backend】: Initializing iSAM2 with 1072 new factors and 138 new values...
+【Backend】: Latest optimized state: pose: [[-0.07022514 -0.99869852  0.03324815 -0.05447368]
+ [-0.35774406 -0.016731   -0.9338295   0.00608394]
+ [ 0.93110017 -0.04960662 -0.35617081 -0.21056599]
+ [ 0.          0.          0.          1.        ]], velocity: [-0.01325398  0.03449497 -0.50361956], bias: acc = 0.000689212  -0.0189649 -0.00565645 gyro = -0.00865415   0.0159616   0.0759742
+
+【Backend】: Latest gtsam_id: 9
+【Backend】: Initial graph optimization complete.
+【Backend】优化误差统计: 本轮新增因子误差 = 356.9101, 当前图总误差 = 356.9101
+【Backend】: Syncing optimized results back to Estimator...
+【Backend】: Updated landmark 1 to [-0.0224456  -4.45734663  0.41252108]
+【Backend】: Updated landmark 3 to [ 1.23891496 -5.34901622  0.11257134]
+【Backend】: Updated landmark 5 to [ 1.85703954 -4.82310309  0.23734829]
+【Backend】: Updated landmark 6 to [ 0.56733595 -6.09256726  0.35341972]
+【Backend】: Updated landmark 7 to [ 2.43106141 -4.57948109  0.38425362]
+【Backend】: Updated landmark 10 to [ 1.77206853 -5.02105476  0.59866468]
+【Backend】: Updated landmark 11 to [ 2.80269209 -4.11263506  0.3558183 ]
+【Backend】: Updated landmark 13 to [-0.87993502 -4.34136354 -0.20724853]
+【Backend】: Updated landmark 15 to [ 0.13557265 -2.73246485 -0.79338659]
+【Backend】: Updated landmark 16 to [ 2.91851527 -4.92388284  0.85292693]
+【Backend】: Updated landmark 18 to [ 0.27981126 -1.16294588 -0.59322639]
+【Backend】: Updated landmark 19 to [-0.28769271 -3.73174731 -0.16819565]
+【Backend】: Updated landmark 20 to [-1.11916259 -2.16585994 -0.70205953]
+【Backend】: Updated landmark 21 to [ 0.31905315 -3.13277265 -0.18474577]
+【Backend】: Updated landmark 22 to [ 2.06856656 -4.74812603  0.55847117]
+【Backend】: Updated landmark 23 to [-0.64583508 -0.63350458 -0.50615562]
+【Backend】: Updated landmark 25 to [-0.42459212 -0.80750874 -0.47665452]
+【Backend】: Updated landmark 26 to [ 1.58765307 -5.11171419  0.16116084]
+【Backend】: Updated landmark 28 to [-0.05248839 -2.80694009 -0.7091753 ]
+【Backend】: Updated landmark 29 to [ 1.28012984 -3.96682867 -0.83571495]
+【Backend】: Updated landmark 30 to [ 0.36455438 -0.46467224 -0.43001266]
+【Backend】: Updated landmark 31 to [-0.44825706 -0.62783787 -0.51625378]
+【Backend】: Updated landmark 32 to [ 0.42269091 -0.62374775 -0.37168639]
+【Backend】: Updated landmark 36 to [ 1.82124076 -4.83739801  0.96277857]
+【Backend】: Updated landmark 37 to [ 0.51061715 -2.90731037 -0.4806862 ]
+【Backend】: Updated landmark 38 to [-1.46565956 -1.44740374 -0.81481663]
+【Backend】: Updated landmark 39 to [ 0.32205595 -0.54242531 -0.44731811]
+【Backend】: Updated landmark 40 to [ 0.06570719 -3.35756032 -0.18567505]
+【Backend】: Updated landmark 41 to [-0.82634347 -4.171961   -0.82670522]
+【Backend】: Updated landmark 42 to [ 0.30061266 -0.48732408 -0.47128337]
+【Backend】: Updated landmark 43 to [ 2.10166063 -4.57496917  0.08983055]
+【Backend】: Updated landmark 44 to [ 0.23881021 -0.62923888 -0.4430562 ]
+【Backend】: Updated landmark 45 to [ 0.18112331 -0.55379246 -0.52826335]
+【Backend】: Updated landmark 47 to [ 0.13684524 -0.94710955 -0.5463916 ]
+【Backend】: Updated landmark 49 to [ 0.25410017 -0.52370221 -0.49134116]
+【Backend】: Updated landmark 52 to [-0.01555004 -3.73805305 -0.49581088]
+【Backend】: Updated landmark 53 to [ 0.21039831 -2.7416003  -1.01732463]
+【Backend】: Updated landmark 54 to [-0.63923897 -4.2143826  -0.48843886]
+【Backend】: Updated landmark 56 to [-0.29843697 -3.68784767 -0.51658911]
+【Backend】: Updated landmark 57 to [ 0.45278581 -0.54937224 -0.38840416]
+【Backend】: Updated landmark 58 to [ 0.30797883 -2.96372357 -0.59024039]
+【Backend】: Updated landmark 59 to [ 1.33639125 -5.47843217  0.51291302]
+【Backend】: Updated landmark 61 to [ 0.43167195 -0.40375603 -0.4214174 ]
+【Backend】: Updated landmark 62 to [-0.42108249 -0.6807428  -0.48301976]
+【Backend】: Updated landmark 63 to [-0.25149417 -2.83186672 -0.69642175]
+【Backend】: Updated landmark 64 to [ 0.12259661 -0.51160309 -0.46946969]
+【Backend】: Updated landmark 65 to [ 0.34629591 -0.43962603 -0.46559645]
+【Backend】: Updated landmark 66 to [ 0.87322557 -3.53934351 -0.59304549]
+【Backend】: Updated landmark 67 to [ 0.38493646 -0.53526536 -0.41350203]
+【Backend】: Updated landmark 68 to [ 0.49436784 -0.62983638 -0.35464887]
+【Backend】: Updated landmark 69 to [-0.38089323 -6.58458908  0.32719267]
+【Backend】: Updated landmark 70 to [ 0.04974379 -0.47846808 -0.44633082]
+【Backend】: Updated landmark 72 to [ 0.21634401 -0.5078542  -0.52378439]
+【Backend】: Updated landmark 73 to [ 0.35170639 -0.57799097 -0.41678255]
+【Backend】: Updated landmark 75 to [ 1.46967849 -1.90365524 -0.61318873]
+【Backend】: Updated landmark 76 to [ 0.42479411 -0.81475593 -0.37201733]
+【Backend】: Updated landmark 77 to [ 0.64997691 -0.67929908 -0.36373185]
+【Backend】: Updated landmark 78 to [ 0.60048272 -2.98451875 -0.73552141]
+【Backend】: Updated landmark 79 to [ 0.47629463 -0.48351765 -0.39872358]
+【Backend】: Updated landmark 80 to [-1.78739852 -5.2436775  -0.65646058]
+【Backend】: Updated landmark 83 to [-1.37366714 -5.60220943 -0.66564341]
+【Backend】: Updated landmark 85 to [ 0.59477404 -0.52020413 -0.43290119]
+【Backend】: Updated landmark 86 to [-0.2564949  -0.81164802 -0.46183261]
+【Backend】: Updated landmark 87 to [ 0.26267578 -0.56452921 -0.44263332]
+【Backend】: Updated landmark 88 to [ 0.31222437 -0.62466433 -0.37020257]
+【Backend】: Updated landmark 89 to [ 1.77316634 -3.87177473 -0.84976001]
+【Backend】: Updated landmark 91 to [ 0.19266467 -0.66888817 -0.50189368]
+【Backend】: Updated landmark 92 to [-2.32223272 -5.20200543 -0.63252377]
+【Backend】: Updated landmark 105 to [ 1.73573298 -3.94732812 -0.3337874 ]
+【Backend】: Updated landmark 107 to [-0.34973707 -0.84348477 -0.47366723]
+【Backend】: Updated landmark 109 to [ 0.55616361 -0.58520501 -0.38516626]
+【Backend】: Updated landmark 110 to [ 0.45120665 -2.94520002 -0.94214281]
+【Backend】: Updated landmark 112 to [ 0.92139777 -5.33119514 -0.43865858]
+【Backend】: Updated landmark 114 to [-0.6853549  -2.03950548 -0.6167606 ]
+【Backend】: Updated landmark 121 to [ 0.46585737 -0.67856507 -0.33745904]
+【Backend】: Updated landmark 122 to [ 0.21899845 -0.58063189 -0.47004947]
+【Backend】: Updated landmark 124 to [ 0.77470488 -3.09053587 -0.94054096]
+【Backend】: Updated landmark 125 to [ 0.26835259 -0.64405654 -0.39687744]
+【Backend】: Updated landmark 127 to [ 0.13260522 -0.78246213 -0.55739614]
+【Backend】: Updated landmark 128 to [-0.68969704 -6.89556555  0.93057327]
+【Backend】: Updated landmark 131 to [-0.47601829 -0.42176396 -0.49548988]
+【Backend】: Updated landmark 132 to [-0.66568024 -0.53660067 -0.51369891]
+【Backend】: Updated landmark 137 to [-0.40197447 -0.51177242 -0.48781713]
+【Backend】: Updated landmark 138 to [ 0.09998213 -0.42511109 -0.44304987]
+【Backend】: Updated landmark 145 to [ 2.19068237 -4.19845815 -0.30596072]
+【Backend】: Updated landmark 146 to [-1.27031323 -4.50630204 -0.85374615]
+【Backend】: Updated landmark 149 to [ 0.36785129 -0.63480898 -0.34702867]
+【Backend】: Updated landmark 152 to [ 0.21775443 -3.45195535 -0.00380509]
+【Backend】: Updated landmark 153 to [-0.06948426 -0.46633058 -0.46342679]
+【Backend】: Updated landmark 154 to [-0.19627717 -0.49114826 -0.47033225]
+【Backend】: Updated landmark 156 to [-0.07389311 -0.53833635 -0.45056938]
+【Backend】: Updated landmark 157 to [-0.43583936 -0.46587478 -0.49679785]
+【Backend】: Updated landmark 158 to [ 1.80226843 -5.09168768 -0.10672194]
+【Backend】: Updated landmark 159 to [ 0.01004409 -0.49774571 -0.45012321]
+【Backend】: Updated landmark 160 to [ 0.02374112 -3.16089223 -1.1124303 ]
+【Backend】: Updated landmark 164 to [ 0.44098218 -3.88956086 -0.50649387]
+【Backend】: Updated landmark 165 to [ 0.45443085 -6.30330885  0.76549263]
+【Backend】: Updated landmark 166 to [ 1.53672657 -5.39656803 -0.18579939]
+【Backend】: Updated landmark 168 to [ 2.57470849 -4.2440173   0.07831346]
+【Backend】: Updated landmark 169 to [-0.24007037 -0.47039126 -0.47677978]
+【Backend】: Updated landmark 170 to [-0.54414536 -0.6053245  -0.50370875]
+【Backend】: Updated landmark 171 to [-0.12427816 -0.67453706 -0.45468735]
+【Backend】: Updated landmark 172 to [-0.25036216 -1.32094008 -0.50701366]
+【Backend】: Updated landmark 175 to [-0.35190294 -0.42999675 -0.48943713]
+【Backend】: Updated landmark 177 to [-1.94132752 -2.21574871 -0.80574127]
+【Backend】: Updated landmark 180 to [ 2.0575979  -4.93211864 -0.75904717]
+【Backend】: Updated landmark 181 to [ 3.26810926 -4.14845028  0.53537559]
+【Backend】: Updated landmark 183 to [ 0.01462196 -0.43539084 -0.44660803]
+【Estimator】正在记录初始优化轨迹...
+【Init】: Sending initialization result to viewer queue...
 【Viewer】: Sending 10 poses and 108 landmarks to viewer.
 【Viewer】: Received new data, caching for update.
 【FeatureTracker】Image data: /home/geneta/dataset/MH_01_EASY/image/data/1403636580263555584.png
@@ -2434,7 +2568,7 @@ pose_w_c: [[-1.0810018   0.26592639 -0.48085927  5.61005045]
 velocity: [ 8.25938668  1.51367641 -6.78083882]
 bias: acc = -0.0196134  -0.041743 0.00946381 gyro =  0.290442 0.0285002  0.416971
 
-      x      x      x      x      x      x      x      x      x	      xA      p� ��  �� ��          D       �R��  �� ��  �w��   S��  �      l��B��         �       �=B��  �u9��          D       0�9��   >B��                  �     l��<��    pose_w_c: [[-1.08512402e+00  2.88751015e-01 -4.94841674e-01  6.88883940e+00]
+      x      x      x      x      x      x      x      x      x	      xA      p� ��  �� ��          D       �R��  �� ��  �w��   S��  �      l��B��         �       �=B��  �u9��          D       0�9��   >B��                  �     l��<��    pose_w_c: [[-1.08512402e+00  2.88751015e-01 -4.94841674e-01  6.88883940e+00]
  [-1.14122188e-01  3.64138641e-01 -9.88776421e-01  2.81160110e+00]
  [ 1.35651902e+00 -1.10135939e+00  1.49924805e-03 -8.41090371e+00]
  [ 0.00000000e+00  0.00000000e+00  0.00000000e+00  1.00000000e+00]]
@@ -5325,9 +5459,9 @@ pose_w_c: [[ 1.51850907e-01 -1.24542739e-01 -1.27487857e+00  2.27769549e+02]
  [ 1.00346602e+00 -2.99366153e-01 -5.15130388e-01  6.23939963e+01]
  [ 1.32656404e+00 -9.91277136e-01  2.27354541e+00 -4.63337637e+02]
  [ 0.00000000e+00  0.00000000e+00  0.00000000e+00  1.00000000e+00]]
-h4���ig�?����������[i+[�8�>�%��ּ�>gB�7�>��a���?���N�?]4Ϳ0W�?pM��g�ệ�擭�;w�}ԍ��g��Zfm����������&�{����1?��o0�nT���j��eﾊyY����,^�� 
-���iM4��ka4C�A�>
-�YWC��>��w����>�^��ؿX��9�M��q�T�      t        #a��         	                            !   velocity: [ 50.60804092  11.81727585 -82.25881461]
+h4���ig�?����������[i+[�8�>�%��ּ�>gB�7�>��a���?���N�?]4Ϳ0W�?pM��g�ệ�擭�;w�}ԍ��g��Zfm����������&�{����1?��o0�nT���j��eﾊyY����,^�� 
+���iM4��ka4C�A�>
+�YWC��>��w����>�^��ؿX��9�M��q�T�      t        #a��         	                            !   velocity: [ 50.60804092  11.81727585 -82.25881461]
 bias: acc = -0.0820322  -0.169332 -0.0843404 gyro =  0.411933 0.0431575  0.402857
 
 pose_w_c: [[ 1.86906963e-01 -1.30197395e-01 -1.27045379e+00  2.43067352e+02]
@@ -31042,7 +31176,7 @@ pose_w_c: [[ 5.50081473e+01 -3.80504357e+01  7.21742219e+01 -6.04719710e+10]
 velocity: [ -514537.38780453 -1015945.9696264  -1448383.90474389]
 bias: acc = -0.0820322  -0.169332 -0.0843404 gyro =  0.411933 0.0431575  0.402857
 
-    Pw2��  G/                                                      �2��  �-      pw2��  H/      2��  �-                                                      �w2��  I/                                                                      02��  �-                                                                                                      0 2��  �)                      �2��  �+                                                      p�2��  �#                      pose_w_c: [[ 5.56694713e+01 -3.71239989e+01  7.38840875e+01 -6.37107761e+10]
+    Pw2��  G/                                                      �2��  �-      pw2��  H/      2��  �-                                                      �w2��  I/                                                                      02��  �-                                                                                                      0 2��  �)                      �2��  �+                                                      p�2��  �#                      pose_w_c: [[ 5.56694713e+01 -3.71239989e+01  7.38840875e+01 -6.37107761e+10]
  [ 1.09962413e+02 -7.33055192e+01  1.45807492e+02 -1.25752401e+11]
  [ 1.57222823e+02 -1.04613234e+02  2.07925745e+02 -1.79396881e+11]
  [ 0.00000000e+00  0.00000000e+00  0.00000000e+00  1.00000000e+00]]
@@ -40896,8 +41030,14 @@ bias: acc = -0.0820322  -0.169332 -0.0843404 gyro =  0.411933 0.0431575  0.40285
 [Main Process] Caught KeyboardInterrupt, initiating shutdown...
 [Main Process] Shutting down all components...
 Visual Feature Tracker shut down signal sent.
+<<<<<<< HEAD
 【Estimator】shut down.
 Visual Feature Tracker has finished processing all data.
 【Viewer】 thread has finished.
 【Estimator】thread has finished.
+=======
+【Estimator】Trajectory file closed.
+【Estimator】shut down.
+Visual Feature Tracker has finished processing all data.
+>>>>>>> 08312b3ac6addb3fafa2dad71cae16028e2925fc
 [Main Process] SLAM system shut down.

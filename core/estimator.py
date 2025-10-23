@@ -8,10 +8,11 @@ from .backend import Backend
 from datatype.keyframe import KeyFrame
 from datatype.global_map import GlobalMap
 from datatype.localmap import LocalMap
-from datatype.landmark import Landmark
+from datatype.landmark import Landmark, LandmarkStatus
 from .imu_process import IMUProcessor
 from .sfm_processor import SfMProcessor
 from .viewer import Viewer3D
+from utils.debug import Debugger
 from .vio_initializer import VIOInitializer
 
 
@@ -69,6 +70,12 @@ class Estimator(threading.Thread):
         # 可视化test
         self.viewer_queue = viewer_queue
 
+        # 轨迹文件
+        self.trajectory_file = None
+        trajectory_output_path = self.config.get('trajectory_output_path', None) # self.config.get('trajectory_output_path', None)
+        if trajectory_output_path:
+            self.trajectory_file = Debugger.initialize_trajectory_file(trajectory_output_path)
+
         # Threading control
         self.is_running = False
 
@@ -78,6 +85,9 @@ class Estimator(threading.Thread):
 
     def shutdown(self):
         self.is_running = False
+        if self.trajectory_file:
+            self.trajectory_file.close()
+            print("【Estimator】Trajectory file closed.")
         print("【Estimator】shut down.")
 
     def run(self):
@@ -158,7 +168,7 @@ class Estimator(threading.Thread):
         new_triangulated_landmarks = {}
         keyframe_window = self.local_map.get_active_keyframes()
         # DEBUG
-        suspect_lm_id = 5311
+        suspect_lm_id = 14815
         # DEBUG
         for lm in self.local_map.get_candidate_landmarks():
             # DEBUG

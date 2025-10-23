@@ -1,11 +1,15 @@
 from collections import deque
 from datatype.landmark import Landmark, LandmarkStatus
 import numpy as np
+import cv2
+import gtsam
 
 class LocalMap:
     def __init__(self, config):
         self.config = config
         self.max_keyframes = self.config.get('window_size', 10)
+
+        self.cam_intrinsics = np.asarray(self.config.get('cam_intrinsics')).reshape(3, 3)
 
         # 使用字典来存储，方便通过ID快速访问
         self.keyframes = {}  # {kf_id: KeyFrame_Object}
@@ -14,7 +18,7 @@ class LocalMap:
     def add_keyframe(self, kf):
         self.keyframes[kf.get_id()] = kf
 
-        suspect_lm_id = 5311 # <--- 设置我们要追踪的目标
+        suspect_lm_id = 14815 # <--- 设置我们要追踪的目标
 
         # 更新Landmark的观测信息，或创建新的Landmark，创建后默认为CANDIDATE
         # DEBUG
@@ -33,7 +37,8 @@ class LocalMap:
         # 维护滑动窗口，剔除最老的关键帧
         if len(self.keyframes) > self.max_keyframes:
             # 找到ID最小的关键帧
-            oldest_kf_id = min(self.keyframes.keys())
+            oldest_kf = min(self.keyframes.values(), key=lambda kf: kf.get_timestamp())
+            oldest_kf_id = oldest_kf.get_id()
             print(f"【LocalMap】: Sliding window is full. Removing oldest KeyFrame {oldest_kf_id}.")
             del self.keyframes[oldest_kf_id]
 
@@ -91,7 +96,8 @@ class LocalMap:
         observing_kf_ids = lm.get_observing_kf_ids()
         witness_kfs = [self.keyframes[kf_id] for kf_id in observing_kf_ids if kf_id in self.keyframes]
 
-        if len(witness_kfs) < 2:
+        # 至少需要3个观测帧
+        if len(witness_kfs) < 3:
             return False
             
         positions = []
@@ -100,13 +106,18 @@ class LocalMap:
             if pose is not None:
                 positions.append(pose[:3, 3])
 
-        if len(positions) < 2:
+        if len(positions) < 3:
             return False
             
         positions = np.array(positions)
 
         # 计算观测基线
         baseline = np.linalg.norm(np.ptp(positions, axis=0))
+
+        # 基线太短，排除
+        if baseline < 0.1:
+            print(f"【Health Check】: Landmark {lm.id} failed baseline check. Baseline: {baseline:.4f}m")
+            return False
 
         # 计算路标点到观测中心的大致深度
         avg_cam_pos = np.mean(positions, axis=0) # 观测中心
@@ -120,10 +131,38 @@ class LocalMap:
         # 一个小的角度，tan(theta)约等于theta（弧度）
         ratio = baseline / depth
         threshold = np.deg2rad(min_parallax_angle_deg)
-        is_healthy = ratio >= threshold
 
-        if landmark_id == 5311:
-            print("\n--- 🩺 Health Check Debug for Landmark [8] 🩺 ---")
+        if ratio < threshold:
+            return False
+
+        # 检查重投影误差和深度
+        # max_reprojection_error = 30.0 # px
+
+        # for kf in witness_kfs:
+        #     pose = kf.get_global_pose()
+        #     if pose is None: continue
+
+        #     T_cam_world = np.linalg.inv(pose)
+        #     point_in_cam_homo = T_cam_world @ np.append(landmark_pos, 1.0)
+            
+        #     # 深度必须为正
+        #     depth = point_in_cam_homo[2] / point_in_cam_homo[3]
+        #     if abs(depth) > 40:
+        #         print(f"【Health Check】: Landmark {lm.id} failed cheirality in KF {kf.get_id()}. Depth: {depth:.4f}m")
+        #         return False
+
+        #     rvec, _ = cv2.Rodrigues(T_cam_world[:3,:3])
+        #     tvec = T_cam_world[:3,3]
+        #     reprojected_pt, _ = cv2.projectPoints(landmark_pos.reshape(1,1,3), rvec, tvec, self.cam_intrinsics, None)
+        #     reproj_error = np.linalg.norm(reprojected_pt.flatten() - lm.observations[kf.get_id()])
+        #     if reproj_error > max_reprojection_error:
+        #         print(f"【Health Check】: Landmark {lm.id} failed reprojection in KF {kf.get_id()}. Error: {reproj_error:.2f}px")
+        #         return False
+
+        if landmark_id == 14815: # 您可以修改为您想追踪的任何ID
+            is_healthy = ratio >= threshold # 重新计算一下最终结果
+            print("\n--- 🩺 Health Check Debug ---")
+            print(f"  Landmark ID: {landmark_id}")
             print(f"  Observing KF IDs in window: {[kf.get_id() for kf in witness_kfs]}")
             print(f"  Baseline (B): {baseline:.4f} m")
             print(f"  Avg Depth (D): {depth:.4f} m")
@@ -132,4 +171,34 @@ class LocalMap:
             print(f"  Result: {'HEALTHY (True)' if is_healthy else 'UNHEALTHY (False)'}")
             print("--- End of Health Check Debug ---\n")
 
-        return is_healthy
+        return True
+
+    
+    def check_landmark_depth(self, landmark_id, max_depth=10.0):
+        lm = self.landmarks.get(landmark_id)
+        # 必须是已三角化的点才有3D位置
+        if not lm:
+            return False
+
+        observing_kf_ids = lm.get_observing_kf_ids()
+        witness_kfs = [self.keyframes[kf_id] for kf_id in observing_kf_ids if kf_id in self.keyframes]
+
+        # 至少需要3个观测帧
+        if len(witness_kfs) < 3:
+            return False
+
+        for kf in witness_kfs:
+            pose = kf.get_global_pose()
+            if pose is None: continue
+
+            T_cam_world = np.linalg.inv(pose)
+            point_in_cam_homo = T_cam_world @ np.append(lm.position_3d, 1.0)
+            depth = point_in_cam_homo[2] / point_in_cam_homo[3]
+
+            if abs(depth) > max_depth:
+                return False
+
+        # if np.linalg.norm(lm.position_3d) > 10:
+        #     return False
+
+        return True
