@@ -2,6 +2,7 @@ import gtsam
 import numpy as np
 import threading
 import queue
+import time
 
 from .backend import Backend
 from datatype.keyframe import KeyFrame
@@ -161,7 +162,7 @@ class Estimator(threading.Thread):
                 print(f"🕵️‍ [Trace l{suspect_lm_id}]: Is a candidate. Checking for triangulation...")
             # DEBUG
             
-            is_ready, first_kf, last_kf = lm.is_ready_for_triangulation(keyframe_window, min_parallax=50)
+            is_ready, first_kf, last_kf = lm.is_ready_for_triangulation(keyframe_window, min_parallax=30)
 
             # DEBUG
             if lm.id == suspect_lm_id and is_ready:
@@ -255,8 +256,8 @@ class Estimator(threading.Thread):
         gyro_std = np.std(gyros, axis=0)
 
         # 从config中读取阈值
-        accel_std_threshold = self.config.get('stationary_accel_std_threshold', 0.2) # m/s^2
-        gyro_std_threshold = self.config.get('stationary_gyro_std_threshold', 0.1) # rad/s
+        accel_std_threshold = self.config.get('stationary_accel_std_threshold', 0.05) # m/s^2
+        gyro_std_threshold = self.config.get('stationary_gyro_std_threshold', 0.05) # rad/s
 
         # 如果所有轴的波动都小于阈值，则认为是静止
         is_still = np.all(accel_std < accel_std_threshold) and np.all(gyro_std < gyro_std_threshold)
@@ -504,7 +505,10 @@ class Estimator(threading.Thread):
         last_kf = active_kfs[-2]
 
         # 创建上一帧到当前帧的IMU因子
+        start_time = time.time()
         imu_factor_data = self.create_imu_factors(last_kf, new_kf)
+        end_time = time.time()
+        print(f"【Estimator Timer】: IMU Factor Creation took {(end_time - start_time) * 1000:.3f} ms.")
         if not imu_factor_data:
             print(f"【Estimator】: No IMU factors between KF {last_kf.get_id()} and KF {new_kf.get_id()}.")
             return
@@ -578,6 +582,7 @@ class Estimator(threading.Thread):
         print(f"【Debug】: Factor instructions generated: {len(visual_factors_to_add)}")
 
         # 将预测结果作为初始估计值以及重投影约束、IMU约束送入后端
+        start_time = time.time()
         self.backend.optimize_incremental(
             last_keyframe=last_kf,
             new_keyframe=new_kf,
@@ -587,12 +592,17 @@ class Estimator(threading.Thread):
             initial_state_guess=(predicted_T_wb, predicted_vel, last_bias),
             is_stationary=is_currently_stationary,
         )
+        end_time = time.time()
+        print(f"【Estimator Timer】: Backend Incremental Optimization took {(end_time - start_time) * 1000:.3f} ms.")
 
         # 优化结束，同步后端结果到Estimator
         self.backend.update_estimator_map(active_kfs, self.local_map.landmarks)
         
         # 审计地图，移除所有变得不健康的“坏苹果”
+        start_time = time.time()
         self.audit_map_after_optimization()
+        end_time = time.time()
+        print(f"【Estimator Timer】: Map Audit took {(end_time - start_time) * 1000:.3f} ms.")
         
         # 更新预积分器的零偏
         _, _, latest_bias = self.backend.get_latest_optimized_state()

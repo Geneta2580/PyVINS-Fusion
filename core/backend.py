@@ -4,6 +4,7 @@ import gtsam
 from gtsam.symbol_shorthand import X, V, B, L
 import re
 from utils.debug import Debugger
+import time
 
 class Backend:
     def __init__(self, global_central_map, config, imu_processor):
@@ -13,7 +14,7 @@ class Backend:
         # 使用 iSAM2 作为优化器
         parameters = gtsam.ISAM2Params()
         parameters.setRelinearizeThreshold(0.1) 
-        parameters.relinearizeSkip = 1
+        parameters.relinearizeSkip = 10
         self.isam2 = gtsam.ISAM2(parameters)
         
         # 鲁棒因子
@@ -200,9 +201,12 @@ class Backend:
 
         # 执行iSAM2的第一次更新（批量模式）
         print(f"【Backend】: Initializing iSAM2 with {graph.size()} new factors and {estimates.size()} new values...")
+        start_time = time.time()
         self.isam2.update(graph, estimates)
         for _ in range(2): self.isam2.update()
-        
+        end_time = time.time()
+        print(f"【Backend Timer】: Initial optimization took { (end_time - start_time) * 1000:.3f} ms.")
+
         # 更新最新bias
         latest_pose, latest_vel, latest_bias = self.get_latest_optimized_state()
         latest_gtsam_id = self.next_gtsam_kf_id - 1
@@ -272,7 +276,7 @@ class Backend:
             # 创建一个非常强的先验因子，将当前帧的速度“钉死”在0
             # ZUPT约束，这个约束的强度需要较强，但不能太强，否则会影响IMU零偏估计
             kf_gtsam_id = self._get_kf_gtsam_id(new_keyframe.get_id())
-            zero_velocity_noise = gtsam.noiseModel.Isotropic.Sigma(3, 1e-2)
+            zero_velocity_noise = gtsam.noiseModel.Isotropic.Sigma(3, 5e-2)
             zero_velocity_prior = gtsam.PriorFactorVector(V(kf_gtsam_id), np.zeros(3), zero_velocity_noise)
             new_graph.add(zero_velocity_prior)
             print("【Backend】: Added Zero-Velocity-Update (ZUPT) factor.")
@@ -281,8 +285,11 @@ class Backend:
         print(f"【Backend】: Updating iSAM2 ({new_graph.size()} new factors, {new_estimates.size()} new variables)...")
         
         try:
+            start_time = time.time()
             self.isam2.update(new_graph, new_estimates)
             for _ in range(2): self.isam2.update()
+            end_time = time.time()
+            print(f"【Backend Timer】: Incremental optimization took { (end_time - start_time) * 1000:.3f} ms.")
 
         except RuntimeError as e:
             print("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")

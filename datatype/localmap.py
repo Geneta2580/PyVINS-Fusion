@@ -3,6 +3,7 @@ from datatype.landmark import Landmark, LandmarkStatus
 import numpy as np
 import cv2
 import gtsam
+import time
 
 class LocalMap:
     def __init__(self, config):
@@ -136,28 +137,28 @@ class LocalMap:
             return False
 
         # 检查重投影误差和深度
-        # max_reprojection_error = 30.0 # px
+        max_reprojection_error = 10.0 # px
 
-        # for kf in witness_kfs:
-        #     pose = kf.get_global_pose()
-        #     if pose is None: continue
+        for kf in witness_kfs:
+            pose = kf.get_global_pose()
+            if pose is None: continue
 
-        #     T_cam_world = np.linalg.inv(pose)
-        #     point_in_cam_homo = T_cam_world @ np.append(landmark_pos, 1.0)
+            T_cam_world = np.linalg.inv(pose)
+            point_in_cam_homo = T_cam_world @ np.append(landmark_pos, 1.0)
             
-        #     # 深度必须为正
-        #     depth = point_in_cam_homo[2] / point_in_cam_homo[3]
-        #     if abs(depth) > 40:
-        #         print(f"【Health Check】: Landmark {lm.id} failed cheirality in KF {kf.get_id()}. Depth: {depth:.4f}m")
-        #         return False
+            # 深度必须为正
+            depth = point_in_cam_homo[2] / point_in_cam_homo[3]
+            if depth <= 0.1:
+                print(f"【Health Check】: Landmark {lm.id} failed cheirality in KF {kf.get_id()}. Depth: {depth:.4f}m")
+                return False
 
-        #     rvec, _ = cv2.Rodrigues(T_cam_world[:3,:3])
-        #     tvec = T_cam_world[:3,3]
-        #     reprojected_pt, _ = cv2.projectPoints(landmark_pos.reshape(1,1,3), rvec, tvec, self.cam_intrinsics, None)
-        #     reproj_error = np.linalg.norm(reprojected_pt.flatten() - lm.observations[kf.get_id()])
-        #     if reproj_error > max_reprojection_error:
-        #         print(f"【Health Check】: Landmark {lm.id} failed reprojection in KF {kf.get_id()}. Error: {reproj_error:.2f}px")
-        #         return False
+            rvec, _ = cv2.Rodrigues(T_cam_world[:3,:3])
+            tvec = T_cam_world[:3,3]
+            reprojected_pt, _ = cv2.projectPoints(landmark_pos.reshape(1,1,3), rvec, tvec, self.cam_intrinsics, None)
+            reproj_error = np.linalg.norm(reprojected_pt.flatten() - lm.observations[kf.get_id()])
+            if reproj_error > max_reprojection_error:
+                print(f"【Health Check】: Landmark {lm.id} failed reprojection in KF {kf.get_id()}. Error: {reproj_error:.2f}px")
+                return False
 
         if landmark_id == 14815: # 您可以修改为您想追踪的任何ID
             is_healthy = ratio >= threshold # 重新计算一下最终结果
@@ -174,31 +175,39 @@ class LocalMap:
         return True
 
     
-    def check_landmark_depth(self, landmark_id, max_depth=10.0):
+    def check_landmark_depth(self, landmark_id, max_depth=400.0):
         lm = self.landmarks.get(landmark_id)
         # 必须是已三角化的点才有3D位置
-        if not lm:
+        if not lm or lm.position_3d is None:
             return False
 
-        observing_kf_ids = lm.get_observing_kf_ids()
-        witness_kfs = [self.keyframes[kf_id] for kf_id in observing_kf_ids if kf_id in self.keyframes]
-
-        # 至少需要3个观测帧
-        if len(witness_kfs) < 3:
+        observing_kf_ids = [kf_id for kf_id in lm.get_observing_kf_ids() if kf_id in self.keyframes]
+        
+        if len(observing_kf_ids) < 2:
             return False
+            
+        # 优化：只检查ID最小和最大的两个观测帧
+        first_kf_id = min(observing_kf_ids)
+        last_kf_id = max(observing_kf_ids)
+        
+        # 将要检查的关键帧限制在这两个极端
+        kfs_to_check = [self.keyframes[first_kf_id]]
+        if first_kf_id != last_kf_id:
+            kfs_to_check.append(self.keyframes[last_kf_id])
 
-        for kf in witness_kfs:
+        for kf in kfs_to_check:
             pose = kf.get_global_pose()
             if pose is None: continue
 
             T_cam_world = np.linalg.inv(pose)
             point_in_cam_homo = T_cam_world @ np.append(lm.position_3d, 1.0)
-            depth = point_in_cam_homo[2] / point_in_cam_homo[3]
-
-            if abs(depth) > max_depth:
+            
+            # 检查深度是否为正且在合理范围内
+            depth = point_in_cam_homo[2]
+            if depth <= 0.1 or depth > max_depth:
                 return False
 
-        # if np.linalg.norm(lm.position_3d) > 10:
+        # if np.linalg.norm(lm.position_3d) > 20:
         #     return False
 
         return True
