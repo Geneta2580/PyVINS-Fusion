@@ -1,4 +1,5 @@
 import numpy as np
+import gtsam
 import matplotlib.pyplot as plt
 import seaborn as sns
 from datetime import datetime
@@ -6,47 +7,59 @@ import os
 import csv
 
 class Debugger:
-    def __init__(self, log_dir="output", file_prefix="log", column_names=None, use_timestamp=True):
-        """
-        初始化日志记录器。
-
-        参数:
-            log_dir (str): 存储日志文件的目录。如果不存在，会自动创建。
-            file_prefix (str): 日志文件名的前缀。
-            column_names (list of str): 用户提供的数据列的表头列表。例如: ['error', 'velocity']。
-            use_timestamp (bool): 是否在文件名中添加时间戳（推荐）。
-        """
+    def __init__(self, file_prefix="debug", column_names=None):
         if column_names is None:
-            column_names = ['value'] # 如果未提供列名，则默认为'value'
+            column_names = ["timestamp", "value"]
+        
+        self.column_names = list(column_names) # 使用传入的列名
 
-        # --- 1. 创建日志目录 ---
-        os.makedirs(log_dir, exist_ok=True)
+        # 输出文件地址, 格式为: output/file_prefix_timestamp.csv
+        log_dir = "output"
+        use_timestamp = True # 是否在文件名中添加时间戳
+        self.log_path = self._initialize_log_file(file_prefix, log_dir, use_timestamp)
+        self.log_file = open(self.log_path, 'w', newline='')
 
-        # --- 2. 构建文件名 ---
+        # 打开文件并写入表头
+        self.writer = csv.DictWriter(self.log_file, fieldnames=self.column_names)
+        self.writer.writeheader()
+        self.log_file.flush()
+        print(f"【Debugger】: Log file initialized at {self.log_path} with columns {self.column_names}")
+
+    def _initialize_log_file(self, prefix, log_dir, use_timestamp):
         if use_timestamp:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            file_name = f"{file_prefix}_{timestamp}.csv"
+            file_name = f"{prefix}_{timestamp}.csv"
         else:
-            file_name = f"{file_prefix}.csv"
+            file_name = f"{prefix}.csv"
         
-        self.log_path = os.path.join(log_dir, file_name)
-        self.round_counter = 0
+        log_path = os.path.join(log_dir, file_name)
 
         # --- 3. 打开文件并写入表头 ---
         # 使用'w'模式（写入）和 newline='' 来防止写入空行
-        self.file_handle = open(self.log_path, 'w', newline='', encoding='utf-8')
+        self.file_handle = open(log_path, 'w', newline='', encoding='utf-8')
         self.writer = csv.writer(self.file_handle)
         
         # 写入完整的表头，第一列总是'Round'
-        header = ['Round'] + column_names
+        header = self.column_names
         self.writer.writerow(header)
         
-        print(f"【Logger】Logging to {self.log_path}")
+        print(f"【Logger】Logging to {log_path}")
 
-    def log(self, *values):
-        row = [self.round_counter] + list(values)
-        self.writer.writerow(row)
-        self.round_counter += 1
+        return log_path
+
+    def log(self, value):
+        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
+        self.writer.writerow([timestamp, value])
+        self.log_file.flush()
+
+    def log_state(self, state_dict):
+        """
+        Logs a dictionary of state variables. Keys must match column names.
+        """
+        # 确保所有列都有值，没有的填空字符串
+        row_data = {key: state_dict.get(key, '') for key in self.column_names}
+        self.writer.writerow(row_data)
+        self.log_file.flush()
 
     def close(self):
         if self.file_handle:
@@ -99,3 +112,49 @@ class Debugger:
 
         except Exception as e:
             print(f"【Debug】: Failed to visualize matrix. Error: {e}")
+
+
+    @staticmethod
+    def initialize_trajectory_file(output_path):
+        """
+        打开一个用于写入轨迹的文件，并写入TUM格式的头部信息。
+        如果成功，返回文件句柄；如果发生错误，则返回None。
+        """
+        try:
+            file_handle = open(output_path, 'w')
+            # 写入TUM格式的头部信息
+            file_handle.write("# timestamp tx ty tz qx qy qz qw\n")
+            print(f"【Debugger】成功初始化轨迹文件: {output_path}")
+            return file_handle
+        except IOError as e:
+            print(f"【Debugger】错误: 无法打开轨迹文件 {output_path} 进行写入: {e}")
+            return None
+
+    @staticmethod
+    def log_trajectory_tum(file_handle, keyframe):
+        """
+        将单个关键帧的位姿以TUM格式记录到指定的轨迹文件中。
+        这是一个静态函数，不依赖于类的实例。
+
+        参数:
+        file_handle (File): 用于写入的文件句柄。
+        keyframe (KeyFrame): 包含位姿和时间戳的关键帧对象。
+        """
+        if not file_handle:
+            return
+
+        timestamp = keyframe.get_timestamp()
+        pose_matrix = keyframe.get_global_pose()
+
+        if pose_matrix is not None:
+            # 提取平移向量
+            t = pose_matrix[:3, 3]
+            # 提取旋转矩阵并转换为gtsam四元数
+            rot_matrix = pose_matrix[:3, :3]
+            q = gtsam.Rot3(rot_matrix).toQuaternion()
+            
+            # 按照TUM格式写入: timestamp tx ty tz qx qy qz qw
+            # gtsam.Quaternion 的顺序是 (w, x, y, z)，所以我们需要调整顺序为 (x, y, z, w)
+            log_line = f"{timestamp} {t[0]} {t[1]} {t[2]} {q.x()} {q.y()} {q.z()} {q.w()}\n"
+            
+            file_handle.write(log_line)

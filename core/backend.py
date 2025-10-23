@@ -12,10 +12,14 @@ class Backend:
 
         # 使用 iSAM2 作为优化器
         parameters = gtsam.ISAM2Params()
-        parameters.setRelinearizeThreshold(0.01) 
+        parameters.setRelinearizeThreshold(0.1) 
         parameters.relinearizeSkip = 1
         self.isam2 = gtsam.ISAM2(parameters)
         
+        # 鲁棒因子
+        self.visual_noise = gtsam.noiseModel.Isotropic.Sigma(2, 1.5)
+        self.visual_robust_noise = gtsam.noiseModel.Robust.Create(gtsam.noiseModel.mEstimator.Huber.Create(2.0), self.visual_noise)
+
         # 状态与id管理
         self.kf_id_to_gtsam_id = {}
         self.landmark_id_to_gtsam_id = {}
@@ -34,8 +38,16 @@ class Backend:
         # 存储最新的优化后的偏置，用于IMU预积分
         self.latest_bias = gtsam.imuBias.ConstantBias()
 
-        # 记录优化误差，debug用
-        self.logger = Debugger(file_prefix="backend", column_names=["error"])
+        # 定义要记录的列
+        log_columns = [
+            "gtsam_id", "pos_x", "pos_y", "pos_z",
+            "vel_x", "vel_y", "vel_z",
+            "bias_acc_x", "bias_acc_y", "bias_acc_z",
+            "bias_gyro_x", "bias_gyro_y", "bias_gyro_z",
+            "total_error", "new_factors_error"
+        ]
+        # 初始化Debugger
+        self.logger = Debugger(file_prefix="backend_state", column_names=log_columns)
 
     # 关键帧id映射到图的id
     def _get_kf_gtsam_id(self, kf_id):
@@ -173,7 +185,6 @@ class Backend:
             graph.add(gtsam.CombinedImuFactor(X(gtsam_id1), V(gtsam_id1), X(gtsam_id2), V(gtsam_id2), B(gtsam_id1), B(gtsam_id2), pim))
 
         # 添加所有初始路标点变量和视觉因子
-        visual_factor_noise = gtsam.noiseModel.Isotropic.Sigma(2, 3.0)
         for lm_id, lm_3d_pos in initial_landmarks.items():
             lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
             estimates.insert(L(lm_gtsam_id), lm_3d_pos)
@@ -184,7 +195,7 @@ class Backend:
                 # 只处理本次优化中新添加的landmark
                 if lm_id in initial_landmarks:
                     lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
-                    factor = gtsam.GenericProjectionFactorCal3_S2(pt_2d, visual_factor_noise, X(kf_gtsam_id), L(lm_gtsam_id), self.K, body_P_sensor=self.body_T_cam)
+                    factor = gtsam.GenericProjectionFactorCal3_S2(pt_2d, self.visual_robust_noise, X(kf_gtsam_id), L(lm_gtsam_id), self.K, body_P_sensor=self.body_T_cam)
                     graph.add(factor)
 
         # 执行iSAM2的第一次更新（批量模式）
@@ -192,14 +203,17 @@ class Backend:
         self.isam2.update(graph, estimates)
         for _ in range(2): self.isam2.update()
         
-        # 记录优化误差
-        self._log_optimization_error(graph)
-
         # 更新最新bias
-        _, _, latest_bias = self.get_latest_optimized_state()
+        latest_pose, latest_vel, latest_bias = self.get_latest_optimized_state()
+        latest_gtsam_id = self.next_gtsam_kf_id - 1
+        print(f"【Backend】: Latest gtsam_id: {latest_gtsam_id}")
         if latest_bias is not None:
             self.latest_bias = latest_bias
         print("【Backend】: Initial graph optimization complete.")
+
+        # 记录优化状态
+        total_error, _ = self._log_optimization_error(graph)
+        self._log_state_and_errors(latest_gtsam_id, latest_pose, latest_vel, latest_bias, total_error, total_error)
 
 
     def optimize_incremental(self, last_keyframe, new_keyframe, new_imu_factors, 
@@ -228,11 +242,20 @@ class Backend:
         for lm_id, lm_3d_pos in new_landmarks.items():
             lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
             # 检查：1) 不在旧图中，2) 还没被添加过 确保顶点只被添加一次
+
+            # ---!!!--- 在此处添加您要的日志 ---!!!---
+            # 打印即将送入优化器的路标点的值
+            print(f"🕵️‍ 【Backend】: 优化器即将处理新路标点 L{lm_id}，其三角化初始值为: {lm_3d_pos}")
+            
+            # 增加一个NaN/Inf的显式检查，这对于调试崩溃至关重要
+            if np.isnan(lm_3d_pos).any() or np.isinf(lm_3d_pos).any():
+                print(f"🔥 【Backend】[致命警告]: 路标点 L{lm_id} 的初始值无效 (NaN/Inf)！优化即将因此崩溃！")
+            # ---!!!--- 日志添加结束 ---!!!---
+
             if not self.isam2.getLinearizationPoint().exists(L(lm_gtsam_id)):
                 new_estimates.insert(L(lm_gtsam_id), lm_3d_pos)
         
         # 添加重投影因子，前面已经添加了新路标点顶点，所以这里只需要添加历史点和新特征点的观测帧重投影因子
-        visual_factor_noise = gtsam.noiseModel.Isotropic.Sigma(2, 3.0)
         current_isam_values = self.isam2.getLinearizationPoint()
         for kf_id, lm_id, pt_2d in new_visual_factors:
             kf_gtsam_id = self._get_kf_gtsam_id(kf_id)
@@ -242,13 +265,14 @@ class Backend:
             lm_exists = current_isam_values.exists(L(lm_gtsam_id)) or new_estimates.exists(L(lm_gtsam_id))
 
             if kf_exists and lm_exists:
-                factor = gtsam.GenericProjectionFactorCal3_S2(pt_2d, visual_factor_noise, X(kf_gtsam_id), L(lm_gtsam_id), self.K, body_P_sensor=self.body_T_cam)
+                factor = gtsam.GenericProjectionFactorCal3_S2(pt_2d, self.visual_robust_noise, X(kf_gtsam_id), L(lm_gtsam_id), self.K, body_P_sensor=self.body_T_cam)
                 new_graph.add(factor)
 
         if is_stationary:
-            # 创建一个非常强的先验因子，将当前帧的速度“钉死”在0，ZUPT约束
+            # 创建一个非常强的先验因子，将当前帧的速度“钉死”在0
+            # ZUPT约束，这个约束的强度需要较强，但不能太强，否则会影响IMU零偏估计
             kf_gtsam_id = self._get_kf_gtsam_id(new_keyframe.get_id())
-            zero_velocity_noise = gtsam.noiseModel.Isotropic.Sigma(3, 1e-4) # 噪声非常小=约束非常强
+            zero_velocity_noise = gtsam.noiseModel.Isotropic.Sigma(3, 1e-2)
             zero_velocity_prior = gtsam.PriorFactorVector(V(kf_gtsam_id), np.zeros(3), zero_velocity_noise)
             new_graph.add(zero_velocity_prior)
             print("【Backend】: Added Zero-Velocity-Update (ZUPT) factor.")
@@ -256,23 +280,27 @@ class Backend:
         # 执行iSAM2增量更新
         print(f"【Backend】: Updating iSAM2 ({new_graph.size()} new factors, {new_estimates.size()} new variables)...")
         
-        # try:
-        self.isam2.update(new_graph, new_estimates)
-        for _ in range(2): self.isam2.update()
+        try:
+            self.isam2.update(new_graph, new_estimates)
+            for _ in range(2): self.isam2.update()
 
-        # 记录优化误差
-        self._log_optimization_error(new_graph)
-
-        # except RuntimeError as e:
-        #     print("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-        #     print("!!!!!!!!!! OPTIMIZATION FAILED !!!!!!!!!!!!!!")
-        #     print(f"ERROR: {e}")
+        except RuntimeError as e:
+            print("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+            print("!!!!!!!!!! OPTIMIZATION FAILED !!!!!!!!!!!!!!")
+            print(f"ERROR: {e}")
 
         # 更新最新bias
-        _, _, latest_bias = self.get_latest_optimized_state()
+        latest_pose, latest_vel, latest_bias = self.get_latest_optimized_state()
+        latest_gtsam_id = self.next_gtsam_kf_id - 1
         if latest_bias is not None:
             self.latest_bias = latest_bias
+
+        # 记录优化误差
+        total_error, new_factors_error = self._log_optimization_error(new_graph)
+        self._log_state_and_errors(latest_gtsam_id, latest_pose, latest_vel, latest_bias, total_error, new_factors_error)
+
         print("【Backend】: Incremental optimization complete.")
+
 
     def _log_optimization_error(self, new_factors_graph):
         try:
@@ -285,7 +313,24 @@ class Backend:
                   f"本轮新增因子误差 = {new_factors_error:.4f}, "
                   f"当前图总误差 = {total_error:.4f}")
             
-            self.logger.log(total_error)
-    
+            return total_error, new_factors_error
+            
         except Exception as e:
             print(f"[Error][Backend] 计算优化误差时出错: {e}")
+            return -1.0, -1.0
+        
+    def _log_state_and_errors(self, latest_gtsam_id, latest_pose, latest_vel, latest_bias, total_error, new_factors_error):
+        position = latest_pose.translation()
+        acc_bias = latest_bias.accelerometer()
+        gyro_bias = latest_bias.gyroscope()
+
+        state_data = {
+            "gtsam_id": latest_gtsam_id,
+            "pos_x": position[0], "pos_y": position[1], "pos_z": position[2],
+            "vel_x": latest_vel[0], "vel_y": latest_vel[1], "vel_z": latest_vel[2],
+            "bias_acc_x": acc_bias[0], "bias_acc_y": acc_bias[1], "bias_acc_z": acc_bias[2],
+            "bias_gyro_x": gyro_bias[0], "bias_gyro_y": gyro_bias[1], "bias_gyro_z": gyro_bias[2],
+            "total_error": total_error,
+            "new_factors_error": new_factors_error
+        }
+        self.logger.log_state(state_data)

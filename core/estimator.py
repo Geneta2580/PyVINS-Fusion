@@ -7,10 +7,11 @@ from .backend import Backend
 from datatype.keyframe import KeyFrame
 from datatype.global_map import GlobalMap
 from datatype.localmap import LocalMap
-from datatype.landmark import Landmark
+from datatype.landmark import Landmark, LandmarkStatus
 from .imu_process import IMUProcessor
 from .sfm_processor import SfMProcessor
 from .viewer import Viewer3D
+from utils.debug import Debugger
 from .vio_initializer import VIOInitializer
 
 
@@ -49,6 +50,12 @@ class Estimator(threading.Thread):
         # 可视化test
         self.viewer_queue = viewer_queue
 
+        # 轨迹文件
+        self.trajectory_file = None
+        trajectory_output_path = self.config.get('trajectory_output_path', None) # self.config.get('trajectory_output_path', None)
+        if trajectory_output_path:
+            self.trajectory_file = Debugger.initialize_trajectory_file(trajectory_output_path)
+
         # Threading control
         self.is_running = False
 
@@ -58,6 +65,9 @@ class Estimator(threading.Thread):
 
     def shutdown(self):
         self.is_running = False
+        if self.trajectory_file:
+            self.trajectory_file.close()
+            print("【Estimator】Trajectory file closed.")
         print("【Estimator】shut down.")
 
     def run(self):
@@ -143,7 +153,7 @@ class Estimator(threading.Thread):
         newly_triangulated_for_backend = {}
         keyframe_window = self.local_map.get_active_keyframes()
         # DEBUG
-        suspect_lm_id = 5311
+        suspect_lm_id = 14815
         # DEBUG
         for lm in self.local_map.get_candidate_landmarks():
             # DEBUG
@@ -245,8 +255,8 @@ class Estimator(threading.Thread):
         gyro_std = np.std(gyros, axis=0)
 
         # 从config中读取阈值
-        accel_std_threshold = self.config.get('stationary_accel_std_threshold', 0.1) # m/s^2
-        gyro_std_threshold = self.config.get('stationary_gyro_std_threshold', 0.05) # rad/s
+        accel_std_threshold = self.config.get('stationary_accel_std_threshold', 0.2) # m/s^2
+        gyro_std_threshold = self.config.get('stationary_gyro_std_threshold', 0.1) # rad/s
 
         # 如果所有轴的波动都小于阈值，则认为是静止
         is_still = np.all(accel_std < accel_std_threshold) and np.all(gyro_std < gyro_std_threshold)
@@ -336,7 +346,17 @@ class Estimator(threading.Thread):
             )
             self.is_initialized = True
 
-            # viewer可视化
+            # 记录初始优化轨迹
+            if self.trajectory_file:
+                print("【Estimator】正在记录初始优化轨迹...")
+                # 按时间戳排序以确保轨迹顺序正确
+                sorted_kfs = sorted(self.local_map.get_active_keyframes(), key=lambda kf: kf.get_timestamp())
+                for kf in sorted_kfs:
+                    Debugger.log_trajectory_tum(self.trajectory_file, kf) # 调用静态方法
+                self.trajectory_file.flush() # 确保数据立即写入磁盘
+            # 记录初始优化轨迹
+            
+            #  viewer可视化
             if self.viewer_queue:
                 print("【Init】: Sending initialization result to viewer queue...")
 
@@ -512,13 +532,15 @@ class Estimator(threading.Thread):
         new_landmarks = self.triangulate_new_landmarks(new_kf)
         if new_landmarks:
             print(f"【Tracking】: Triangulated {len(new_landmarks)} new landmarks.")
+            print(f"【Tracking】: New landmarks: {new_landmarks.keys()}")
 
         # DEBUG
-        suspect_lm_id = 5311
+        suspect_lm_id = 14815
         # DEBUG
         
         # 为后端准备重投影因子
         visual_factors_to_add = []
+        active_kf_ids = {kf.get_id() for kf in self.local_map.get_active_keyframes()}
         for lm_id in new_landmarks.keys():
             # DEBUG
             if lm_id == suspect_lm_id:
@@ -531,17 +553,20 @@ class Estimator(threading.Thread):
                     print(f"🕵️‍ [Trace l{suspect_lm_id}]: As new landmark. PASSED health check. Adding its factors...")
                 # DEBUG
                 for obs_kf_id, obs_pt_2d in lm.observations.items():
-                    # 指令格式: (关键帧ID, 路标点ID, 2D观测坐标)
-                    visual_factors_to_add.append((obs_kf_id, lm_id, obs_pt_2d))
-                    if lm_id == suspect_lm_id:
-                        print(f"🕵️‍ [Trace l{suspect_lm_id}]: OBSERVED by new KF {obs_kf_id}. observation point: {obs_pt_2d}")
-                        # print(f"🕵️‍ [Trace l{suspect_lm_id}]: OBSERVED by new KF {obs_kf_id}. observation point: {obs_pt_2d}")
+                    # 只添加活跃窗口内关键帧的观测
+                    if obs_kf_id in active_kf_ids:
+                        # 指令格式: (关键帧ID, 路标点ID, 2D观测坐标)
+                        visual_factors_to_add.append((obs_kf_id, lm_id, obs_pt_2d))
+                        print(f"🕵️‍ [Trace l{lm_id}]: OBSERVED by new KF {obs_kf_id}. observation point: {obs_pt_2d}")
+                        # if lm_id == suspect_lm_id:
+                        #     print(f"🕵️‍ [Trace l{suspect_lm_id}]: OBSERVED by new KF {obs_kf_id}. observation point: {obs_pt_2d}")
+                            # print(f"🕵️‍ [Trace l{suspect_lm_id}]: OBSERVED by new KF {obs_kf_id}. observation point: {obs_pt_2d}")
 
         # 添加旧点重投影因子 (不在新三角化列表里)
         for lm_id, pt_2d in zip(new_kf.get_visual_feature_ids(), new_kf.get_visual_features()):
             if lm_id not in new_landmarks:
-                # 必须是活跃点 (没有被剔除)
-                if lm_id in self.local_map.landmarks:
+                # 必须是活跃点 (没有被剔除) 且已经三角化
+                if lm_id in self.local_map.landmarks and self.local_map.landmarks[lm_id].status == LandmarkStatus.TRIANGULATED:
                     # DEBUG
                     if lm_id == suspect_lm_id:
                         print(f"🕵️‍ [Trace l{suspect_lm_id}]: As old landmark. PASSED health check. Adding its factors...")
@@ -574,6 +599,12 @@ class Estimator(threading.Thread):
         if latest_bias:
             self.imu_processor.update_bias(latest_bias)
 
+        # 记录优化轨迹
+        Debugger.log_trajectory_tum(self.trajectory_file, new_kf) # 调用静态方法
+        if self.trajectory_file:
+            self.trajectory_file.flush() # 确保数据立即写入磁盘
+        # 记录优化轨迹
+        
         # viewer可视化
         if self.viewer_queue:
             print("【Tracking】: Sending tracking result to viewer queue...")

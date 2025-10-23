@@ -18,7 +18,7 @@ class LocalMap:
     def add_keyframe(self, kf):
         self.keyframes[kf.get_id()] = kf
 
-        suspect_lm_id = 5311 # <--- 设置我们要追踪的目标
+        suspect_lm_id = 14815 # <--- 设置我们要追踪的目标
 
         # 更新Landmark的观测信息，或创建新的Landmark，创建后默认为CANDIDATE
         # DEBUG
@@ -37,7 +37,8 @@ class LocalMap:
         # 维护滑动窗口，剔除最老的关键帧
         if len(self.keyframes) > self.max_keyframes:
             # 找到ID最小的关键帧
-            oldest_kf_id = min(self.keyframes.keys())
+            oldest_kf = min(self.keyframes.values(), key=lambda kf: kf.get_timestamp())
+            oldest_kf_id = oldest_kf.get_id()
             print(f"【LocalMap】: Sliding window is full. Removing oldest KeyFrame {oldest_kf_id}.")
             del self.keyframes[oldest_kf_id]
 
@@ -95,7 +96,8 @@ class LocalMap:
         observing_kf_ids = lm.get_observing_kf_ids()
         witness_kfs = [self.keyframes[kf_id] for kf_id in observing_kf_ids if kf_id in self.keyframes]
 
-        if len(witness_kfs) < 2:
+        # 至少需要3个观测帧
+        if len(witness_kfs) < 3:
             return False
             
         positions = []
@@ -104,13 +106,18 @@ class LocalMap:
             if pose is not None:
                 positions.append(pose[:3, 3])
 
-        if len(positions) < 2:
+        if len(positions) < 3:
             return False
             
         positions = np.array(positions)
 
         # 计算观测基线
         baseline = np.linalg.norm(np.ptp(positions, axis=0))
+
+        # 基线太短，排除
+        if baseline < 0.1:
+            print(f"【Health Check】: Landmark {lm.id} failed baseline check. Baseline: {baseline:.4f}m")
+            return False
 
         # 计算路标点到观测中心的大致深度
         avg_cam_pos = np.mean(positions, axis=0) # 观测中心
@@ -152,7 +159,7 @@ class LocalMap:
         #         print(f"【Health Check】: Landmark {lm.id} failed reprojection in KF {kf.get_id()}. Error: {reproj_error:.2f}px")
         #         return False
 
-        if landmark_id == 5311: # 您可以修改为您想追踪的任何ID
+        if landmark_id == 14815: # 您可以修改为您想追踪的任何ID
             is_healthy = ratio >= threshold # 重新计算一下最终结果
             print("\n--- 🩺 Health Check Debug ---")
             print(f"  Landmark ID: {landmark_id}")
@@ -176,7 +183,8 @@ class LocalMap:
         observing_kf_ids = lm.get_observing_kf_ids()
         witness_kfs = [self.keyframes[kf_id] for kf_id in observing_kf_ids if kf_id in self.keyframes]
 
-        if len(witness_kfs) < 2:
+        # 至少需要3个观测帧
+        if len(witness_kfs) < 3:
             return False
 
         for kf in witness_kfs:
@@ -190,7 +198,7 @@ class LocalMap:
             if abs(depth) > max_depth:
                 return False
 
-        if np.linalg.norm(lm.position_3d) > 20:
-            return False
+        # if np.linalg.norm(lm.position_3d) > 10:
+        #     return False
 
         return True
