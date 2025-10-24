@@ -102,8 +102,8 @@ class Estimator(threading.Thread):
                     self.next_kf_id += 1
                     stale_lm_ids = self.local_map.add_keyframe(new_kf)
 
-                    if stale_lm_ids:
-                        self.backend.remove_stale_landmarks(stale_lm_ids)
+                    # if stale_lm_ids:
+                    #     self.backend.remove_stale_landmarks(stale_lm_ids)
 
                     active_keyframes = self.local_map.get_active_keyframes()
 
@@ -600,7 +600,7 @@ class Estimator(threading.Thread):
         
         # 审计地图，移除所有变得不健康的“坏苹果”
         start_time = time.time()
-        self.audit_map_after_optimization()
+        # self.audit_map_after_optimization()
         end_time = time.time()
         print(f"【Estimator Timer】: Map Audit took {(end_time - start_time) * 1000:.3f} ms.")
         

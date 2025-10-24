@@ -79,7 +79,7 @@ class LocalMap:
     def get_candidate_landmarks(self):
         return [lm for lm in self.landmarks.values() if lm.status == LandmarkStatus.CANDIDATE]
 
-    def check_landmark_health(self, landmark_id, candidate_position_3d=None, min_parallax_angle_deg=5.0):
+    def check_landmark_health(self, landmark_id, candidate_position_3d=None, min_parallax_angle_deg=3.0):
         lm = self.landmarks.get(landmark_id)
         # 必须是已三角化的点才有3D位置
         if not lm:
@@ -115,10 +115,10 @@ class LocalMap:
         # 计算观测基线
         baseline = np.linalg.norm(np.ptp(positions, axis=0))
 
-        # 基线太短，排除
-        if baseline < 0.1:
-            print(f"【Health Check】: Landmark {lm.id} failed baseline check. Baseline: {baseline:.4f}m")
-            return False
+        # # 基线太短，排除
+        # if baseline < 0.05:
+        #     print(f"【Health Check】: Landmark {lm.id} failed baseline check. Baseline: {baseline:.4f}m")
+        #     return False
 
         # 计算路标点到观测中心的大致深度
         avg_cam_pos = np.mean(positions, axis=0) # 观测中心
@@ -137,7 +137,7 @@ class LocalMap:
             return False
 
         # 检查重投影误差和深度
-        max_reprojection_error = 10.0 # px
+        max_reprojection_error = 5.0 # px
 
         for kf in witness_kfs:
             pose = kf.get_global_pose()
@@ -148,17 +148,17 @@ class LocalMap:
             
             # 深度必须为正
             depth = point_in_cam_homo[2] / point_in_cam_homo[3]
-            if depth <= 0.1:
+            if depth <= 0.1 or depth > 400.0:
                 print(f"【Health Check】: Landmark {lm.id} failed cheirality in KF {kf.get_id()}. Depth: {depth:.4f}m")
                 return False
 
-            rvec, _ = cv2.Rodrigues(T_cam_world[:3,:3])
-            tvec = T_cam_world[:3,3]
-            reprojected_pt, _ = cv2.projectPoints(landmark_pos.reshape(1,1,3), rvec, tvec, self.cam_intrinsics, None)
-            reproj_error = np.linalg.norm(reprojected_pt.flatten() - lm.observations[kf.get_id()])
-            if reproj_error > max_reprojection_error:
-                print(f"【Health Check】: Landmark {lm.id} failed reprojection in KF {kf.get_id()}. Error: {reproj_error:.2f}px")
-                return False
+            # rvec, _ = cv2.Rodrigues(T_cam_world[:3,:3])
+            # tvec = T_cam_world[:3,3]
+            # reprojected_pt, _ = cv2.projectPoints(landmark_pos.reshape(1,1,3), rvec, tvec, self.cam_intrinsics, None)
+            # reproj_error = np.linalg.norm(reprojected_pt.flatten() - lm.observations[kf.get_id()])
+            # if reproj_error > max_reprojection_error:
+            #     print(f"【Health Check】: Landmark {lm.id} failed reprojection in KF {kf.get_id()}. Error: {reproj_error:.2f}px")
+            #     return False
 
         if landmark_id == 14815: # 您可以修改为您想追踪的任何ID
             is_healthy = ratio >= threshold # 重新计算一下最终结果

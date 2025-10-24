@@ -14,12 +14,12 @@ class Backend:
         # 使用 iSAM2 作为优化器
         parameters = gtsam.ISAM2Params()
         parameters.setRelinearizeThreshold(0.1) 
-        parameters.relinearizeSkip = 10
+        parameters.relinearizeSkip = 100
         self.isam2 = gtsam.ISAM2(parameters)
         
         # 鲁棒因子
-        self.visual_noise = gtsam.noiseModel.Isotropic.Sigma(2, 1.5)
-        self.visual_robust_noise = gtsam.noiseModel.Robust.Create(gtsam.noiseModel.mEstimator.Huber.Create(2.0), self.visual_noise)
+        self.visual_noise = gtsam.noiseModel.Isotropic.Sigma(2, 2.0)
+        self.visual_robust_noise = gtsam.noiseModel.Robust.Create(gtsam.noiseModel.mEstimator.Huber.Create(3.0), self.visual_noise)
 
         # 状态与id管理
         self.kf_id_to_gtsam_id = {}
@@ -165,9 +165,9 @@ class Backend:
 
             # 为第一帧添加强先验
             if kf_gtsam_id == 0:
-                prior_pose_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([1e-6]*3 + [1e-4]*3))
-                prior_vel_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([1e-4] * 3))
-                prior_bias_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([1e-2]*3 + [1e-3]*3))
+                prior_pose_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([1e-4]*3 + [1e-2]*3))
+                prior_vel_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([1e-2] * 3))
+                prior_bias_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([1e-1]*3 + [1e-2]*3))
                 graph.add(gtsam.PriorFactorPose3(X(0), T_wb, prior_pose_noise))
                 graph.add(gtsam.PriorFactorVector(V(0), velocity, prior_vel_noise))
                 graph.add(gtsam.PriorFactorConstantBias(B(0), bias, prior_bias_noise))
@@ -272,14 +272,23 @@ class Backend:
                 factor = gtsam.GenericProjectionFactorCal3_S2(pt_2d, self.visual_robust_noise, X(kf_gtsam_id), L(lm_gtsam_id), self.K, body_P_sensor=self.body_T_cam)
                 new_graph.add(factor)
 
+        # ======================= ZERO-VELOCITY UPDATE (ZUPT) - SOFT CONSTRAINT =======================
         if is_stationary:
-            # 创建一个非常强的先验因子，将当前帧的速度“钉死”在0
-            # ZUPT约束，这个约束的强度需要较强，但不能太强，否则会影响IMU零偏估计
-            kf_gtsam_id = self._get_kf_gtsam_id(new_keyframe.get_id())
-            zero_velocity_noise = gtsam.noiseModel.Isotropic.Sigma(3, 5e-2)
-            zero_velocity_prior = gtsam.PriorFactorVector(V(kf_gtsam_id), np.zeros(3), zero_velocity_noise)
-            new_graph.add(zero_velocity_prior)
-            print("【Backend】: Added Zero-Velocity-Update (ZUPT) factor.")
+            # 使用BetweenFactor在连续两帧的速度之间添加一个软约束，使它们趋于一致（即速度变化为零）
+            last_kf_gtsam_id = self._get_kf_gtsam_id(last_keyframe.get_id())
+            new_kf_gtsam_id = self._get_kf_gtsam_id(new_keyframe.get_id())
+
+            # 噪声模型相对宽松，允许一定的抖动
+            zero_velocity_diff_noise = gtsam.noiseModel.Isotropic.Sigma(3, 0.1) 
+            
+            # 约束 V(new) - V(last) = 0
+            zupt_factor = gtsam.BetweenFactorVector(V(last_kf_gtsam_id), 
+                                                    V(new_kf_gtsam_id), 
+                                                    np.zeros(3), 
+                                                    zero_velocity_diff_noise)
+            new_graph.add(zupt_factor)
+            print("【Backend】: Added soft Zero-Velocity-Update (ZUPT) factor between frames.")
+        # ============================================================================================
 
         # 执行iSAM2增量更新
         print(f"【Backend】: Updating iSAM2 ({new_graph.size()} new factors, {new_estimates.size()} new variables)...")
