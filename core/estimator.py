@@ -102,9 +102,6 @@ class Estimator(threading.Thread):
                     self.next_kf_id += 1
                     stale_lm_ids = self.local_map.add_keyframe(new_kf)
 
-                    # if stale_lm_ids:
-                    #     self.backend.remove_stale_landmarks(stale_lm_ids)
-
                     active_keyframes = self.local_map.get_active_keyframes()
 
                     if not self.is_initialized:
@@ -232,8 +229,6 @@ class Estimator(threading.Thread):
             for lm_id in landmarks_to_remove:
                 if lm_id in self.local_map.landmarks:
                     del self.local_map.landmarks[lm_id]
-
-            self.backend.remove_stale_landmarks(landmarks_to_remove)
     
     # 零速检查
     def is_stationary(self, imu_measurements_between_kfs):
