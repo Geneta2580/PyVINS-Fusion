@@ -19,7 +19,7 @@ class LocalMap:
     def add_keyframe(self, kf):
         self.keyframes[kf.get_id()] = kf
 
-        suspect_lm_id = 14815 # <--- 设置我们要追踪的目标
+        suspect_lm_id = 12354 # <--- 设置我们要追踪的目标
 
         # 更新Landmark的观测信息，或创建新的Landmark，创建后默认为CANDIDATE
         # DEBUG
@@ -98,46 +98,55 @@ class LocalMap:
         witness_kfs = [self.keyframes[kf_id] for kf_id in observing_kf_ids if kf_id in self.keyframes]
 
         # 至少需要3个观测帧
-        if len(witness_kfs) < 3:
-            return False
+        # if len(witness_kfs) < 3:
+        #     print(f"【Health Check】: Landmark {lm.id} failed witness KF count check. Count: {len(witness_kfs)}")
+        #     return False
             
         positions = []
         for kf in witness_kfs:
             pose = kf.get_global_pose()
             if pose is not None:
                 positions.append(pose[:3, 3])
-
-        if len(positions) < 3:
-            return False
             
         positions = np.array(positions)
 
-        # 计算观测基线
-        baseline = np.linalg.norm(np.ptp(positions, axis=0))
+        import gtsam
 
-        # # 基线太短，排除
+        # 查找所有包含 "Smart" 和 "Stereo" 的因子
+        smart_stereo_factors = [item for item in dir(gtsam) if "Smart" in item ]
+        print(smart_stereo_factors)
+
+
+        # 计算观测基线
+        # baseline = np.linalg.norm(np.ptp(positions, axis=0))
+
+        # 基线太短，排除
         # if baseline < 0.05:
         #     print(f"【Health Check】: Landmark {lm.id} failed baseline check. Baseline: {baseline:.4f}m")
         #     return False
 
         # 计算路标点到观测中心的大致深度
-        avg_cam_pos = np.mean(positions, axis=0) # 观测中心
-        depth = np.linalg.norm(landmark_pos - avg_cam_pos)
+        # avg_cam_pos = np.mean(positions, axis=0) # 观测中心
+        # depth = np.linalg.norm(landmark_pos - avg_cam_pos)
 
         # 避免除以零
-        if depth < 1e-6:
-            return False
+        # if depth < 1e-6:
+        #     return False
         
         # 检查基线与深度的比值（近似于 2 * tan(parallax_angle / 2)）
         # 一个小的角度，tan(theta)约等于theta（弧度）
-        ratio = baseline / depth
-        threshold = np.deg2rad(min_parallax_angle_deg)
+        # ratio = baseline / depth
+        # threshold = np.deg2rad(min_parallax_angle_deg)
 
-        if ratio < threshold:
-            return False
+        # if ratio < threshold:
+        #     return False
 
         # 检查重投影误差和深度
-        max_reprojection_error = 5.0 # px
+        max_reprojection_error = 10.0 # px
+
+        # 计算平均重投影误差
+        total_reproj_error = 0.0
+        valid_kf_count = 0.0
 
         for kf in witness_kfs:
             pose = kf.get_global_pose()
@@ -152,59 +161,78 @@ class LocalMap:
                 print(f"【Health Check】: Landmark {lm.id} failed cheirality in KF {kf.get_id()}. Depth: {depth:.4f}m")
                 return False
 
-            # rvec, _ = cv2.Rodrigues(T_cam_world[:3,:3])
-            # tvec = T_cam_world[:3,3]
-            # reprojected_pt, _ = cv2.projectPoints(landmark_pos.reshape(1,1,3), rvec, tvec, self.cam_intrinsics, None)
-            # reproj_error = np.linalg.norm(reprojected_pt.flatten() - lm.observations[kf.get_id()])
-            # if reproj_error > max_reprojection_error:
-            #     print(f"【Health Check】: Landmark {lm.id} failed reprojection in KF {kf.get_id()}. Error: {reproj_error:.2f}px")
-            #     return False
+            rvec, _ = cv2.Rodrigues(T_cam_world[:3,:3])
+            tvec = T_cam_world[:3,3]
+            reprojected_pt, _ = cv2.projectPoints(landmark_pos.reshape(1,1,3), rvec, tvec, self.cam_intrinsics, None)
+            reproj_error = np.linalg.norm(reprojected_pt.flatten() - lm.observations[kf.get_id()])
 
-        if landmark_id == 14815: # 您可以修改为您想追踪的任何ID
-            is_healthy = ratio >= threshold # 重新计算一下最终结果
-            print("\n--- 🩺 Health Check Debug ---")
-            print(f"  Landmark ID: {landmark_id}")
-            print(f"  Observing KF IDs in window: {[kf.get_id() for kf in witness_kfs]}")
-            print(f"  Baseline (B): {baseline:.4f} m")
-            print(f"  Avg Depth (D): {depth:.4f} m")
-            print(f"  Ratio (B/D): {ratio:.4f}")
-            print(f"  Threshold (rad): {threshold:.4f}")
-            print(f"  Result: {'HEALTHY (True)' if is_healthy else 'UNHEALTHY (False)'}")
-            print("--- End of Health Check Debug ---\n")
+            total_reproj_error += reproj_error
+            valid_kf_count += 1
+
+        if valid_kf_count == 0:
+            return False
+
+        avg_reproj_error = total_reproj_error / valid_kf_count
+        if avg_reproj_error > max_reprojection_error:
+            print(f"【Health Check】: Landmark {lm.id} failed avg reprojection. Avg Error: {avg_reproj_error:.2f}px over {valid_kf_count} KFs")
+            return False
+
+        # if landmark_id == 14815: # 您可以修改为您想追踪的任何ID
+        #     is_healthy = ratio >= threshold # 重新计算一下最终结果
+        #     print("\n--- 🩺 Health Check Debug ---")
+        #     print(f"  Landmark ID: {landmark_id}")
+        #     print(f"  Observing KF IDs in window: {[kf.get_id() for kf in witness_kfs]}")
+        #     print(f"  Baseline (B): {baseline:.4f} m")
+        #     print(f"  Avg Depth (D): {depth:.4f} m")
+        #     print(f"  Ratio (B/D): {ratio:.4f}")
+        #     print(f"  Threshold (rad): {threshold:.4f}")
+        #     print(f"  Result: {'HEALTHY (True)' if is_healthy else 'UNHEALTHY (False)'}")
+        #     print("--- End of Health Check Debug ---\n")
 
         return True
 
     
-    def check_landmark_depth(self, landmark_id, max_depth=400.0):
+    def check_landmark_depth(self, landmark_id, candidate_position_3d=None, max_depth=400.0):
         lm = self.landmarks.get(landmark_id)
         # 必须是已三角化的点才有3D位置
-        if not lm or lm.position_3d is None:
+        if not lm:
             return False
 
-        observing_kf_ids = [kf_id for kf_id in lm.get_observing_kf_ids() if kf_id in self.keyframes]
-        
-        if len(observing_kf_ids) < 2:
+        # 对于还没有确认三角化的点，使用候选位置
+        if candidate_position_3d is not None:
+            landmark_pos = candidate_position_3d
+        # 对于已经三角化的点，使用三角化后的位置
+        elif lm.status == LandmarkStatus.TRIANGULATED and lm.position_3d is not None:
+            landmark_pos = lm.position_3d
+        else:
             return False
-            
-        # 优化：只检查ID最小和最大的两个观测帧
-        first_kf_id = min(observing_kf_ids)
-        last_kf_id = max(observing_kf_ids)
+
+        kfs_to_check = [self.keyframes[kf_id] for kf_id in lm.get_observing_kf_ids() if kf_id in self.keyframes]
         
-        # 将要检查的关键帧限制在这两个极端
-        kfs_to_check = [self.keyframes[first_kf_id]]
-        if first_kf_id != last_kf_id:
-            kfs_to_check.append(self.keyframes[last_kf_id])
+        if len(kfs_to_check) < 3:
+            print(f"【Depth Check】: Landmark {lm.id} failed witness KF count check. Count: {len(kfs_to_check)}")
+            return False
+
+        # # 优化：只检查ID最小和最大的两个观测帧
+        # first_kf_id = min(observing_kf_ids)
+        # last_kf_id = max(observing_kf_ids)
+        
+        # # 将要检查的关键帧限制在这两个极端
+        # kfs_to_check = [self.keyframes[first_kf_id]]
+        # if first_kf_id != last_kf_id:
+        #     kfs_to_check.append(self.keyframes[last_kf_id])
 
         for kf in kfs_to_check:
             pose = kf.get_global_pose()
             if pose is None: continue
 
             T_cam_world = np.linalg.inv(pose)
-            point_in_cam_homo = T_cam_world @ np.append(lm.position_3d, 1.0)
+            point_in_cam_homo = T_cam_world @ np.append(landmark_pos, 1.0)
             
             # 检查深度是否为正且在合理范围内
             depth = point_in_cam_homo[2]
             if depth <= 0.1 or depth > max_depth:
+                print(f"【Depth Check】: Landmark {lm.id} failed depth check. Depth: {depth:.4f}m")
                 return False
 
         # if np.linalg.norm(lm.position_3d) > 20:

@@ -16,13 +16,13 @@ class Backend:
         # 使用 iSAM2 作为优化器
         self.lag_window_size = config.get('lag_window_size', 10) # 优化器的滑窗
         parameters = gtsam.ISAM2Params()
-        parameters.setRelinearizeThreshold(0.1) 
+        parameters.setRelinearizeThreshold(0.01) 
         parameters.relinearizeSkip = 1
         self.smoother = IncrementalFixedLagSmoother(self.lag_window_size, parameters) # 自动边缘化
         
         # 鲁棒因子
         self.visual_noise = gtsam.noiseModel.Isotropic.Sigma(2, 2.0)
-        self.visual_robust_noise = gtsam.noiseModel.Robust.Create(gtsam.noiseModel.mEstimator.Huber.Create(3.0), self.visual_noise)
+        self.visual_robust_noise = gtsam.noiseModel.Robust.Create(gtsam.noiseModel.mEstimator.Huber.Create(1.345), self.visual_noise)
 
         # 状态与id管理
         self.kf_id_to_gtsam_id = {}
@@ -109,7 +109,7 @@ class Backend:
                 optimized_position = optimized_results.atPoint3(L(gtsam_id))
                 # 2. 调用对象的方法来更新其内部状态
                 landmark_obj.set_triangulated(optimized_position)
-                # print(f"【Backend】: Updated landmark {lm_id} to {optimized_position}")
+                print(f"【Backend】: Updated landmark {lm_id} to {optimized_position}")
 
 
     def initialize_optimize(self, initial_keyframes, initial_imu_factors, initial_landmarks, initial_velocities, initial_bias):
@@ -335,7 +335,7 @@ class Backend:
                   f"本轮新增因子误差 = {new_factors_error:.4f}")
 
             # ======================= DETAILED FACTOR ERROR LOGGING =======================
-            debug_start_frame = 600 # 设为0以立即开始打印
+            debug_start_frame = 680 # 设为0以立即开始打印
             latest_gtsam_id = self.next_gtsam_kf_id - 1
             if latest_gtsam_id >= debug_start_frame:
                 print("\n" + "="*40 + f" DETAILED ERROR ANALYSIS (Frame {latest_gtsam_id}) " + "="*40)
@@ -351,15 +351,15 @@ class Backend:
                         error = factor.error(optimized_result)
                         
                         # 打印误差大于阈值的因子，以避免日志刷屏
-                        # if error > 1.0: 
-                        # 打印因子的Python类名
-                        factor_type = factor.__class__.__name__
-                        print(f"  - Factor {i}: Error = {error:.4f}, Type = {factor_type}")
-                        
-                        # 尝试打印与该因子相关的Key
-                        keys = factor.keys()
-                        key_str = ", ".join([gtsam.DefaultKeyFormatter(key) for key in keys])
-                        print(f"    Keys: [{key_str}]")
+                        if error > 100.0: 
+                            # 打印因子的Python类名
+                            factor_type = factor.__class__.__name__
+                            print(f"  - Factor {i}: Error = {error:.4f}, Type = {factor_type}")
+                            
+                            # 尝试打印与该因子相关的Key
+                            keys = factor.keys()
+                            key_str = ", ".join([gtsam.DefaultKeyFormatter(key) for key in keys])
+                            print(f"    Keys: [{key_str}]")
                             
                     except Exception as e_factor:
                         # 捕获计算单个因子误差时可能发生的错误

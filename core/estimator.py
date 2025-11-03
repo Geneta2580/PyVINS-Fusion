@@ -99,6 +99,7 @@ class Estimator(threading.Thread):
                     new_kf.add_visual_features(visual_features, feature_ids)
                     new_kf.set_image(image)
 
+                    print(f"【Estimator】: New KF {new_kf.get_id()} added. Timestamp: {new_kf.get_timestamp()}")
                     self.next_kf_id += 1
                     stale_lm_ids = self.local_map.add_keyframe(new_kf)
 
@@ -151,7 +152,7 @@ class Estimator(threading.Thread):
         newly_triangulated_for_backend = {}
         keyframe_window = self.local_map.get_active_keyframes()
         # DEBUG
-        suspect_lm_id = 14815
+        suspect_lm_id = 12354
         # DEBUG
         for lm in self.local_map.get_candidate_landmarks():
             # DEBUG
@@ -189,7 +190,7 @@ class Estimator(threading.Thread):
                         print(f"🕵️‍ [Trace l{suspect_lm_id}]: TRIANGULATED successfully to position {points_3d_world}.")
                     # DEBUG
 
-                    is_healthy = self.local_map.check_landmark_health(lm.id, points_3d_world)
+                    is_healthy = self.local_map.check_landmark_depth(lm.id, candidate_position_3d=points_3d_world)
                     if is_healthy:
                         lm.set_triangulated(points_3d_world)
                         newly_triangulated_for_backend[lm.id] = points_3d_world
@@ -217,10 +218,8 @@ class Estimator(threading.Thread):
         landmarks_to_remove = []
         # 遍历所有已三角化的路标点
         for lm_id in self.local_map.get_active_landmarks().keys():
-            # 使用同一个健康检查函数进行“年检”
-            # is_healthy = self.local_map.check_landmark_health(lm_id)
-            is_depth_ok = self.local_map.check_landmark_depth(lm_id)
-            if not is_depth_ok:
+            is_healthy = self.local_map.check_landmark_health(lm_id)
+            if not is_healthy:
                 landmarks_to_remove.append(lm_id)
         
         if landmarks_to_remove:
@@ -229,6 +228,9 @@ class Estimator(threading.Thread):
             for lm_id in landmarks_to_remove:
                 if lm_id in self.local_map.landmarks:
                     del self.local_map.landmarks[lm_id]
+            
+            # TODO：从后端中也移除这个landmark
+            
     
     # 零速检查
     def is_stationary(self, imu_measurements_between_kfs):
@@ -251,8 +253,8 @@ class Estimator(threading.Thread):
         gyro_std = np.std(gyros, axis=0)
 
         # 从config中读取阈值
-        accel_std_threshold = self.config.get('stationary_accel_std_threshold', 0.05) # m/s^2
-        gyro_std_threshold = self.config.get('stationary_gyro_std_threshold', 0.05) # rad/s
+        accel_std_threshold = self.config.get('stationary_accel_std_threshold', 0.03) # m/s^2
+        gyro_std_threshold = self.config.get('stationary_gyro_std_threshold', 0.03) # rad/s
 
         # 如果所有轴的波动都小于阈值，则认为是静止
         is_still = np.all(accel_std < accel_std_threshold) and np.all(gyro_std < gyro_std_threshold)
@@ -534,7 +536,7 @@ class Estimator(threading.Thread):
             print(f"【Tracking】: New landmarks: {new_landmarks.keys()}")
 
         # DEBUG
-        suspect_lm_id = 14815
+        suspect_lm_id = 12354
         # DEBUG
         
         # 为后端准备重投影因子
@@ -595,7 +597,7 @@ class Estimator(threading.Thread):
         
         # 审计地图，移除所有变得不健康的“坏苹果”
         start_time = time.time()
-        # self.audit_map_after_optimization()
+        self.audit_map_after_optimization()
         end_time = time.time()
         print(f"【Estimator Timer】: Map Audit took {(end_time - start_time) * 1000:.3f} ms.")
         
