@@ -36,7 +36,7 @@ class Landmark:
         self.position_3d = position_3d
         self.status = LandmarkStatus.TRIANGULATED
 
-    def is_ready_for_triangulation(self, keyframe_window, min_parallax=30):
+    def is_ready_for_triangulation(self, keyframe_window, min_parallax=10):
         # 必须是候选点，且至少有三个观测
         if self.status != LandmarkStatus.CANDIDATE or self.get_observation_count() < 3:
             return False, None, None

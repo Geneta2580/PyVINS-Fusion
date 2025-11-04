@@ -57,6 +57,9 @@ class Estimator(threading.Thread):
         if trajectory_output_path:
             self.trajectory_file = Debugger.initialize_trajectory_file(trajectory_output_path)
 
+        # 劣质点黑名单
+        self.landmark_denylist = set()
+
         # Threading control
         self.is_running = False
 
@@ -94,9 +97,21 @@ class Estimator(threading.Thread):
                     feature_ids = package['feature_ids']
                     image = package['image']
 
+                    # 过滤掉黑名单中的特征点
+                    filtered_features = []
+                    filtered_ids = []
+                    for feat, fid in zip(visual_features, feature_ids):
+                        if fid not in self.landmark_denylist:
+                            filtered_features.append(feat)
+                            filtered_ids.append(fid)
+                    
+                    if len(filtered_ids) < 10: # (可选的安全检查)
+                        print(f"【Estimator】: 过滤后特征点过少 ({len(filtered_ids)})，跳过此帧。")
+                        continue
+
                     new_id = self.next_kf_id
                     new_kf = KeyFrame(new_id, timestamp)
-                    new_kf.add_visual_features(visual_features, feature_ids)
+                    new_kf.add_visual_features(filtered_features, filtered_ids)
                     new_kf.set_image(image)
 
                     self.next_kf_id += 1
@@ -227,6 +242,9 @@ class Estimator(threading.Thread):
             for lm_id in landmarks_to_remove:
                 if lm_id in self.local_map.landmarks:
                     del self.local_map.landmarks[lm_id]
+
+                # 将其列入黑名单
+                self.landmark_denylist.add(lm_id)
 
             # 从后端移除异常点
             self.backend.remove_stale_landmarks(landmarks_to_remove)
@@ -499,6 +517,7 @@ class Estimator(threading.Thread):
             return
 
         last_kf = active_kfs[-2]
+        oldest_kf_id_in_window = active_kfs[0].get_id()
 
         # 创建上一帧到当前帧的IMU因子
         start_time = time.time()
@@ -587,6 +606,7 @@ class Estimator(threading.Thread):
             new_visual_factors=visual_factors_to_add,
             initial_state_guess=(predicted_T_wb, predicted_vel, last_bias),
             is_stationary=is_currently_stationary,
+            oldest_kf_id_in_window=oldest_kf_id_in_window
         )
         end_time = time.time()
         print(f"【Estimator Timer】: Backend Incremental Optimization took {(end_time - start_time) * 1000:.3f} ms.")
