@@ -217,10 +217,8 @@ class Estimator(threading.Thread):
         landmarks_to_remove = []
         # 遍历所有已三角化的路标点
         for lm_id in self.local_map.get_active_landmarks().keys():
-            # 使用同一个健康检查函数进行“年检”
-            # is_healthy = self.local_map.check_landmark_health(lm_id)
-            is_depth_ok = self.local_map.check_landmark_depth(lm_id)
-            if not is_depth_ok:
+            is_health_ok = self.local_map.check_landmark_health_after_optimization(lm_id)
+            if not is_health_ok:
                 landmarks_to_remove.append(lm_id)
         
         if landmarks_to_remove:
@@ -229,6 +227,9 @@ class Estimator(threading.Thread):
             for lm_id in landmarks_to_remove:
                 if lm_id in self.local_map.landmarks:
                     del self.local_map.landmarks[lm_id]
+
+            # 从后端移除异常点
+            self.backend.remove_stale_landmarks(landmarks_to_remove)
     
     # 零速检查
     def is_stationary(self, imu_measurements_between_kfs):
@@ -595,7 +596,7 @@ class Estimator(threading.Thread):
         
         # 审计地图，移除所有变得不健康的“坏苹果”
         start_time = time.time()
-        # self.audit_map_after_optimization()
+        self.audit_map_after_optimization()
         end_time = time.time()
         print(f"【Estimator Timer】: Map Audit took {(end_time - start_time) * 1000:.3f} ms.")
         

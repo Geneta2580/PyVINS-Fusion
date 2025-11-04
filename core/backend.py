@@ -16,18 +16,19 @@ class Backend:
         # 使用 iSAM2 作为优化器
         self.lag_window_size = config.get('lag_window_size', 10) # 优化器的滑窗
         parameters = gtsam.ISAM2Params()
-        parameters.setRelinearizeThreshold(0.1) 
+        parameters.setRelinearizeThreshold(0.001) 
         parameters.relinearizeSkip = 1
         self.smoother = IncrementalFixedLagSmoother(self.lag_window_size, parameters) # 自动边缘化
         
         # 鲁棒因子
-        self.visual_noise = gtsam.noiseModel.Isotropic.Sigma(2, 2.0)
-        self.visual_robust_noise = gtsam.noiseModel.Robust.Create(gtsam.noiseModel.mEstimator.Huber.Create(3.0), self.visual_noise)
+        self.visual_noise = gtsam.noiseModel.Isotropic.Sigma(2, 3.0)
+        self.visual_robust_noise = gtsam.noiseModel.Robust.Create(gtsam.noiseModel.mEstimator.Huber.Create(1.345), self.visual_noise)
 
         # 状态与id管理
         self.kf_id_to_gtsam_id = {}
         self.landmark_id_to_gtsam_id = {}
         self.next_gtsam_kf_id = 0
+        self.factor_to_remove = gtsam.KeyVector()
         
         # 获取相机内、外参
         cam_intrinsics = np.asarray(self.config.get('cam_intrinsics')).reshape(3, 3)
@@ -109,7 +110,36 @@ class Backend:
                 optimized_position = optimized_results.atPoint3(L(gtsam_id))
                 # 2. 调用对象的方法来更新其内部状态
                 landmark_obj.set_triangulated(optimized_position)
-                # print(f"【Backend】: Updated landmark {lm_id} to {optimized_position}")
+                print(f"【Backend】: Updated landmark {lm_id} to {optimized_position}")
+
+    def remove_stale_landmarks(self, stale_lm_ids):
+        print(f"【Backend】: Receiving command to remove {len(stale_lm_ids)} stale landmarks.")
+        if not stale_lm_ids:
+            return
+        
+        # 获取与要删除的路标点相关的因子索引
+        graph = self.smoother.getFactors()
+        factor_indices_to_remove = gtsam.KeyVector()
+        stale_lm_keys = {L(self._get_lm_gtsam_id(lm_id)) for lm_id in stale_lm_ids}
+
+        # 遍历图，找到需要删除的因子索引
+        for i in range(graph.size()):
+            factor = graph.at(i)
+            if factor:
+                for key in factor.keys():
+                    if key in stale_lm_keys:
+                        factor_indices_to_remove.append(i)
+                        break
+        
+        self.factor_to_remove = factor_indices_to_remove
+        
+        # if self.factor_to_remove.size() > 0:
+        #     print(f"【Backend】: Queued {self.factor_to_remove.size()} factors for removal.")
+
+        # 删除路标点id映射
+        for lm_id in stale_lm_ids:
+            if lm_id in self.landmark_id_to_gtsam_id:
+                del self.landmark_id_to_gtsam_id[lm_id]
 
 
     def initialize_optimize(self, initial_keyframes, initial_imu_factors, initial_landmarks, initial_velocities, initial_bias):
@@ -215,7 +245,6 @@ class Backend:
 
     def optimize_incremental(self, last_keyframe, new_keyframe, new_imu_factors, 
                             new_landmarks, new_visual_factors, initial_state_guess, is_stationary):
-
         new_graph = gtsam.NonlinearFactorGraph()
         new_estimates = gtsam.Values()
         new_window_stamps = FixedLagSmootherKeyTimestampMap()
@@ -300,7 +329,8 @@ class Backend:
         
         try:
             start_time = time.time()
-            self.smoother.update(new_graph, new_estimates, new_window_stamps)
+            self.smoother.update(new_graph, new_estimates, new_window_stamps, self.factor_to_remove)
+            self.factor_to_remove = gtsam.KeyVector() # 重置列表
             end_time = time.time()
             print(f"【Backend Timer】: Incremental optimization took { (end_time - start_time) * 1000:.3f} ms.")
 
@@ -351,15 +381,15 @@ class Backend:
                         error = factor.error(optimized_result)
                         
                         # 打印误差大于阈值的因子，以避免日志刷屏
-                        # if error > 1.0: 
-                        # 打印因子的Python类名
-                        factor_type = factor.__class__.__name__
-                        print(f"  - Factor {i}: Error = {error:.4f}, Type = {factor_type}")
-                        
-                        # 尝试打印与该因子相关的Key
-                        keys = factor.keys()
-                        key_str = ", ".join([gtsam.DefaultKeyFormatter(key) for key in keys])
-                        print(f"    Keys: [{key_str}]")
+                        if error > 100.0: 
+                            # 打印因子的Python类名
+                            factor_type = factor.__class__.__name__
+                            print(f"  - Factor {i}: Error = {error:.4f}, Type = {factor_type}")
+                            
+                            # 尝试打印与该因子相关的Key
+                            keys = factor.keys()
+                            key_str = ", ".join([gtsam.DefaultKeyFormatter(key) for key in keys])
+                            print(f"    Keys: [{key_str}]")
                             
                     except Exception as e_factor:
                         # 捕获计算单个因子误差时可能发生的错误

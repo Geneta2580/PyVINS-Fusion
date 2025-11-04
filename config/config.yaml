@@ -17,7 +17,7 @@ dataset_type: "euroc"
 window_size: 10
 
 # 选择关键帧最小视差
-min_parallax: 5
+min_parallax: 3
 
 # 最大特征点数
 max_features_to_detect: 500
