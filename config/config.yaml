@@ -49,15 +49,26 @@ visualize: True
 gravity: 9.81
 
 # 注意这里只是sigma，不是sigma^2
-accel_noise_sigma: 0.01
-gyro_noise_sigma: 0.01
-accel_bias_rw_sigma: 0.001 # 零偏随机游走
-gyro_bias_rw_sigma: 0.001
+# accel_noise_sigma: 0.002
+# accel_bias_rw_sigma: 0.003 # 零偏随机游走
+# gyro_noise_sigma: 0.0002
+# gyro_bias_rw_sigma: 0.00002
 
-# accel_noise_sigma: 0.00016968
+# accel_noise_sigma: 0.002 
+# gyro_noise_sigma: 0.00016968
+# accel_bias_rw_sigma: 0.003
+# gyro_bias_rw_sigma: 0.000019393
+
+
+accel_noise_sigma: 0.028
+gyro_noise_sigma: 0.0024
+accel_bias_rw_sigma: 0.00021
+gyro_bias_rw_sigma: 0.00000137
+
+# accel_noise_sigma: 0.01
+# accel_bias_rw_sigma: 0.001
 # gyro_noise_sigma: 0.002
-# accel_bias_rw_sigma: 0.000019393 # 零偏随机游走
-# gyro_bias_rw_sigma: 0.003
+# gyro_bias_rw_sigma: 0.0005
 
 
 # 初始化窗口大小

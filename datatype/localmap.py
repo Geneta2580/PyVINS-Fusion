@@ -10,7 +10,7 @@ class LocalMap:
         self.config = config
         self.max_keyframes = self.config.get('window_size', 10)
         self.max_depth = 400.0
-        self.max_reprojection_error = 20.0
+        self.max_reprojection_error = 30.0
 
         self.cam_intrinsics = np.asarray(self.config.get('cam_intrinsics')).reshape(3, 3)
 
@@ -139,8 +139,6 @@ class LocalMap:
             return False
 
         # 检查重投影误差和深度
-        max_reprojection_error = 5.0 # px
-
         for kf in witness_kfs:
             pose = kf.get_global_pose()
             if pose is None: continue
@@ -151,7 +149,16 @@ class LocalMap:
             # 深度必须为正
             depth = point_in_cam_homo[2] / point_in_cam_homo[3]
             if depth <= 0.1 or depth > 400.0:
-                print(f"【Health Check】: Landmark {lm.id} failed cheirality in KF {kf.get_id()}. Depth: {depth:.4f}m")
+                print(f"【Triangulation Health Check】: Landmark {lm.id} failed cheirality in KF {kf.get_id()}. Depth: {depth:.4f}m")
+                return False
+
+            # 检查重投影误差
+            rvec, _ = cv2.Rodrigues(T_cam_world[:3,:3])
+            tvec = T_cam_world[:3,3]
+            reprojected_pt, _ = cv2.projectPoints(landmark_pos.reshape(1,1,3), rvec, tvec, self.cam_intrinsics, None)
+            reproj_error = np.linalg.norm(reprojected_pt.flatten() - lm.observations[kf.get_id()])
+            if reproj_error > self.max_reprojection_error:
+                print(f"【Triangulation Health Check】: Landmark {lm.id} failed reprojection in KF {kf.get_id()}. Error: {reproj_error:.2f}px")
                 return False
 
         if landmark_id == 14815: # 您可以修改为您想追踪的任何ID
@@ -181,16 +188,16 @@ class LocalMap:
         if len(observing_kf_ids) < 2:
             return True
 
-        kfs_to_check = [self.keyframes[kf_id] for kf_id in observing_kf_ids]
+        # kfs_to_check = [self.keyframes[kf_id] for kf_id in observing_kf_ids]
 
-        # # 优化：只检查ID最小和最大的两个观测帧
-        # first_kf_id = min(observing_kf_ids)
-        # last_kf_id = max(observing_kf_ids)
+        # 优化：只检查ID最小和最大的两个观测帧
+        first_kf_id = min(observing_kf_ids)
+        last_kf_id = max(observing_kf_ids)
         
-        # # 将要检查的关键帧限制在这两个极端
-        # kfs_to_check = [self.keyframes[first_kf_id]]
-        # if first_kf_id != last_kf_id:
-        #     kfs_to_check.append(self.keyframes[last_kf_id])
+        # 将要检查的关键帧限制在这两个极端
+        kfs_to_check = [self.keyframes[first_kf_id]]
+        if first_kf_id != last_kf_id:
+            kfs_to_check.append(self.keyframes[last_kf_id])
 
         for kf in kfs_to_check:
             pose = kf.get_global_pose()
@@ -202,7 +209,7 @@ class LocalMap:
             # 检查深度是否为正且在合理范围内
             depth = point_in_cam_homo[2]
             if depth <= 0.1 or depth > self.max_depth:
-                print(f"【Health Check】: Landmark {lm.id} failed depth check in KF {kf.get_id()}. Depth: {depth:.4f}m")
+                print(f"【Optimization Health Check】: Landmark {lm.id} failed depth check in KF {kf.get_id()}. Depth: {depth:.4f}m")
                 return False
 
             # 检查重投影误差
@@ -211,7 +218,7 @@ class LocalMap:
             reprojected_pt, _ = cv2.projectPoints(lm.position_3d.reshape(1,1,3), rvec, tvec, self.cam_intrinsics, None)
             reproj_error = np.linalg.norm(reprojected_pt.flatten() - lm.observations[kf.get_id()])
             if reproj_error > self.max_reprojection_error:
-                print(f"【Health Check】: Landmark {lm.id} failed reprojection in KF {kf.get_id()}. Error: {reproj_error:.2f}px")
+                print(f"【Optimization Health Check】: Landmark {lm.id} failed reprojection in KF {kf.get_id()}. Error: {reproj_error:.2f}px")
                 return False
 
         return True

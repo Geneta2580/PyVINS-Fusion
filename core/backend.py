@@ -22,7 +22,7 @@ class Backend:
         
         # 鲁棒因子
         self.visual_noise = gtsam.noiseModel.Isotropic.Sigma(2, 3.0)
-        self.visual_robust_noise = gtsam.noiseModel.Robust.Create(gtsam.noiseModel.mEstimator.Tukey.Create(30.0), self.visual_noise)
+        self.visual_robust_noise = gtsam.noiseModel.Robust.Create(gtsam.noiseModel.mEstimator.Huber.Create(1.345), self.visual_noise)
 
         # 状态与id管理
         self.kf_id_to_gtsam_id = {}
