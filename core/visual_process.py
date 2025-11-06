@@ -19,7 +19,7 @@ class VisualProcessor:
         dist_coeffs_raw = self.config.get('distortion_coefficients', np.zeros(4).tolist())
         self.dist_coeffs = np.asarray(dist_coeffs_raw).reshape(4, 1)
 
-        self.min_dist = self.config.get('min_dist', 15) # 特征点间的最小像素距离
+        self.min_dist = self.config.get('min_dist', 30) # 特征点间的最小像素距离
 
         # 特征点id
         self.next_feature_id = 0
@@ -146,9 +146,12 @@ class VisualProcessor:
             cv2.waitKey(1)
 
         # 如果跟踪到的特征点太少，则补充特征点
-        if len(good_curr) < (self.max_features_to_detect * self.min_track_ratio):
+        if len(good_curr) < (self.max_features_to_detect):
             # print(f"【Visual Processor】: Not enough features tracked. Need to detect more features.")
-            is_kf = True
+            if len(good_curr) < (self.max_features_to_detect * self.min_track_ratio):
+                is_kf = False
+            else:
+                is_kf = True
             mask = np.ones_like(curr_gray)
             for pt in good_curr.reshape(-1, 2):
                 cv2.circle(mask, tuple(pt.astype(int)), self.min_dist, 0, -1)

@@ -20,7 +20,7 @@ window_size: 10
 min_parallax: 3
 
 # 最大特征点数
-max_features_to_detect: 500
+max_features_to_detect: 400
 
 # 最小跟踪比例
 min_track_ratio: 0.6
@@ -59,16 +59,15 @@ gravity: 9.81
 # accel_bias_rw_sigma: 0.003
 # gyro_bias_rw_sigma: 0.000019393
 
+# accel_noise_sigma: 0.028
+# gyro_noise_sigma: 0.0024
+# accel_bias_rw_sigma: 0.00021
+# gyro_bias_rw_sigma: 0.00000137
 
 accel_noise_sigma: 0.028
 gyro_noise_sigma: 0.0024
 accel_bias_rw_sigma: 0.00021
-gyro_bias_rw_sigma: 0.00000137
-
-# accel_noise_sigma: 0.01
-# accel_bias_rw_sigma: 0.001
-# gyro_noise_sigma: 0.002
-# gyro_bias_rw_sigma: 0.0005
+gyro_bias_rw_sigma: 0.0000137
 
 
 # 初始化窗口大小
