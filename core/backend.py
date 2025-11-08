@@ -17,7 +17,7 @@ class Backend:
         # 使用 iSAM2 作为优化器
         self.lag_window_size = config.get('lag_window_size', 10) # 优化器的滑窗
         parameters = gtsam.ISAM2Params()
-        parameters.setRelinearizeThreshold(0.01) 
+        parameters.setRelinearizeThreshold(0.001) 
         parameters.relinearizeSkip = 1
         self.smoother = IncrementalFixedLagSmoother(self.lag_window_size, parameters) # 自动边缘化
         
@@ -303,6 +303,7 @@ class Backend:
         new_window_stamps[V(kf_gtsam_id)] = float(kf_gtsam_id)
         new_window_stamps[B(kf_gtsam_id)] = float(kf_gtsam_id)
 
+        # if not is_stationary:
         # 添加IMU因子
         last_kf_gtsam_id = self._get_kf_gtsam_id(last_keyframe.get_id())
         pim = new_imu_factors['imu_preintegration']
@@ -312,6 +313,7 @@ class Backend:
         new_graph.add(imu_factor)
 
         # 添加新路标点顶点，注意这里添加的顶点只在new_estimates中还没有进入isam2的图
+        # if not is_stationary:
         for lm_id, lm_3d_pos in new_landmarks.items():
             # 检查：如果ID映射已被删除（虽然不太可能发生在新landmark上，但为了安全起见）
             if lm_id not in self.landmark_id_to_gtsam_id:
@@ -350,7 +352,10 @@ class Backend:
                 factor = gtsam.GenericProjectionFactorCal3_S2(pt_2d, self.visual_robust_noise, X(kf_gtsam_id), L(lm_gtsam_id), self.K, body_P_sensor=self.body_T_cam)
                 new_graph.add(factor)
                 new_window_stamps[L(lm_gtsam_id)] = float(kf_gtsam_id) # 这里也需要更新历史路标点的滑窗记录
-
+            
+        #     print(f"【Backend】: Added {len(new_landmarks)} new landmarks and {len(new_visual_factors)} visual factors.")
+        # else:
+        #     print("【Backend】: Skipped visual landmarks and factors due to stationary state.")
 
         # ======================= ZERO-VELOCITY UPDATE (ZUPT) & NO-MOTION POSE FACTOR =======================
         if is_stationary:
@@ -362,14 +367,14 @@ class Backend:
             new_graph.add(zero_velocity_prior)
             print("【Backend】: Added Zero-Velocity-Update (ZUPT) factor.")
 
-            # 添加单位位姿因子
-            no_motion_pose_noise = gtsam.noiseModel.Diagonal.Sigmas(
-                np.array([0.01, 0.01, 0.01,  # 旋转轴 (roll, pitch, yaw)
-                          0.03, 0.03, 0.03])) # 平移 (x, y, z)
+            # # 添加单位位姿因子
+            # no_motion_pose_noise = gtsam.noiseModel.Diagonal.Sigmas(
+            #     np.array([0.01, 0.01, 0.01,  # 旋转轴 (roll, pitch, yaw)
+            #               0.03, 0.03, 0.03])) # 平移 (x, y, z)
             
-            new_graph.add(gtsam.BetweenFactorPose3(X(last_kf_gtsam_id), X(kf_gtsam_id),      
-                          gtsam.Pose3(), no_motion_pose_noise))
-            print("【Backend】: Added No-Motion Pose Factor.")
+            # new_graph.add(gtsam.BetweenFactorPose3(X(last_kf_gtsam_id), X(kf_gtsam_id),      
+            #               gtsam.Pose3(), no_motion_pose_noise))
+            # print("【Backend】: Added No-Motion Pose Factor.")
         # ============================================================================================
 
         # 执行iSAM2增量更新

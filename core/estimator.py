@@ -177,7 +177,7 @@ class Estimator(threading.Thread):
                 print(f"🕵️‍ [Trace l{suspect_lm_id}]: Is a candidate. Checking for triangulation...")
             # DEBUG
             
-            is_ready, first_kf, last_kf = lm.is_ready_for_triangulation(keyframe_window, min_parallax=30)
+            is_ready, first_kf, last_kf = lm.is_ready_for_triangulation(keyframe_window, min_parallax=70)
 
             # DEBUG
             if lm.id == suspect_lm_id and is_ready:

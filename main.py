@@ -42,8 +42,8 @@ def main():
     global_central_map = GlobalMap()
 
     # 创建队列
-    feature_tracker_to_estimator_queue = queue.Queue(maxsize=5)
-    estimator_to_viewer_queue = queue.Queue(maxsize=5)
+    feature_tracker_to_estimator_queue = queue.Queue(maxsize=20)
+    estimator_to_viewer_queue = queue.Queue(maxsize=20)
 
     # 初始化数据加载器
     dataloader_config = {'path': config['dataset_path'], 'dataset_type': config['dataset_type']}
