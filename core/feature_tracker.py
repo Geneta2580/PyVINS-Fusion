@@ -66,12 +66,17 @@ class FeatureTracker(threading.Thread):
                 print(f"【FeatureTracker】Image data: {data[1]}")
                 
                 # 光流追踪特征点
-                undistorted_features, feature_ids, is_kf_visual = self.visual_processor.track_features(image_data)
+                undistorted_features, feature_ids, is_kf_visual, is_stationary = self.visual_processor.track_features(image_data)
 
                 is_kf = is_kf_visual
+                # 判断关键帧逻辑3：时间条件
                 if self.last_kf_timestamp is not None:
-                    is_kf_time = (timestamp - self.last_kf_timestamp) > self.config.get('min_kf_interval', 0.1)
-                    is_kf = is_kf_visual or is_kf_time
+                    # 间隔大于最大关键帧间隔，强制插入关键帧
+                    is_kf_time_max = (timestamp - self.last_kf_timestamp) > self.config.get('max_kf_interval', 5)
+                    is_kf_time_min = (timestamp - self.last_kf_timestamp) > self.config.get('min_kf_interval', 0.2)
+                    # 视觉条件满足且间隔大于最小关键帧间隔才能插入关键帧
+                    is_kf_temp = is_kf_visual and is_kf_time_min
+                    is_kf = is_kf_temp or is_kf_time_max
 
                 if is_kf:
                     # 处理关键帧
@@ -80,6 +85,7 @@ class FeatureTracker(threading.Thread):
                         'feature_ids': feature_ids,
                         'timestamp': timestamp,
                         'image': image_data,
+                        'is_stationary': is_stationary
                     }
                     self.last_kf_timestamp = timestamp
                     try:

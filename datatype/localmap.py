@@ -11,8 +11,8 @@ class LocalMap:
         self.config = config
         self.max_keyframes = self.config.get('window_size', 10)
         self.max_depth = 400.0
-        self.triangulation_max_reprojection_error = 10.0
-        self.optimization_max_reprojection_error = 20.0
+        self.triangulation_max_reprojection_error = 30.0
+        self.optimization_max_reprojection_error = 30.0
 
         self.cam_intrinsics = np.asarray(self.config.get('cam_intrinsics')).reshape(3, 3)
 
@@ -138,6 +138,7 @@ class LocalMap:
         threshold = np.deg2rad(min_parallax_angle_deg)
 
         if ratio < threshold:
+            print(f"【Triangulation Health Check】: Landmark {lm.id} failed parallax check. theta: {ratio:.4f}")
             return False
 
         # 检查重投影误差和深度

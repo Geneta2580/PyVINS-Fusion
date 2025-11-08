@@ -2,7 +2,8 @@ import queue
 import numpy as np
 import gtsam
 from gtsam.symbol_shorthand import X, V, B, L
-from gtsam_unstable import IncrementalFixedLagSmoother, FixedLagSmootherKeyTimestampMap
+# from gtsam_unstable import IncrementalFixedLagSmoother, FixedLagSmootherKeyTimestampMap
+from gtsam import IncrementalFixedLagSmoother
 
 import re
 from utils.debug import Debugger
@@ -28,7 +29,7 @@ class Backend:
         self.kf_id_to_gtsam_id = {}
         self.landmark_id_to_gtsam_id = {}
         self.next_gtsam_kf_id = 0
-        self.factor_indices_to_remove = gtsam.KeyVector()
+        self.factor_indices_to_remove = []
 
         # 获取相机内、外参
         cam_intrinsics = np.asarray(self.config.get('cam_intrinsics')).reshape(3, 3)
@@ -113,68 +114,71 @@ class Backend:
                 # print(f"【Backend】: Updated landmark {lm_id} to {optimized_position}")
 
     def remove_stale_landmarks(self, unhealty_lm_ids, unhealty_lm_ids_depth, oldest_kf_id_in_window):
-        # 2. 修改：这个函数现在只负责“登记”要删除的路标点ID，不计算索引
         print(f"【Backend】: 接收到移除 {len(unhealty_lm_ids)} 个陈旧路标点的指令。")
         if not unhealty_lm_ids:
             return
 
-        graph = self.smoother.getFactors()
-        factor_indices_to_remove = gtsam.KeyVector()
-        unhealty_lm_keys = {L(self._get_lm_gtsam_id(lm_id)) for lm_id in unhealty_lm_ids}
-
-        factor_indices_to_remove_depth = gtsam.KeyVector()
-        unhealty_lm_keys_depth = {L(self._get_lm_gtsam_id(lm_id)) for lm_id in unhealty_lm_ids_depth}
-
-        # oldest_kf_id_in_window += 1 
-        oldest_gtsam_key = None
-        if oldest_kf_id_in_window is not None and oldest_kf_id_in_window in self.kf_id_to_gtsam_id:
-            oldest_gtsam_key = X(self._get_kf_gtsam_id(oldest_kf_id_in_window))
-            print(f"【Backend】: 最旧的关键帧的gtsam_id: {oldest_gtsam_key}")
-
-
-        for i in range(graph.size()):
-            factor = graph.at(i)
-            if factor is not None:
-                for key in factor.keys():
-                    # print(f"key: {key}")
-                    # if key == oldest_gtsam_key:
-                    #     factor_type = factor.__class__.__name__
-                    #     key_str = ", ".join([gtsam.DefaultKeyFormatter(key) for key in factor.keys()])
-                    #     print(f"  [跳过删除] Index: {i}, 类型: {factor_type}, 连接: [{key_str}] (这是最旧的关键帧)")
-                    #     break # 绝不删除与最旧的关键帧相连的因子
-
-                    if key in unhealty_lm_keys:
-                        factor_type = factor.__class__.__name__
-                        key_str = ", ".join([gtsam.DefaultKeyFormatter(key) for key in factor.keys()])
-                        print(f"  [标记删除] Index: {i}, 类型: {factor_type}, 连接: [{key_str}]")
-                        factor_indices_to_remove.append(i)
-
-                        if key in unhealty_lm_keys_depth:
-                            print(f"检测到深度为负的因子，尝试删除")
-                            # print(f"key: {key}")
-                            print(f"  [标记删除深度] Index: {i}, 类型: {factor_type}, 连接: [{key_str}]")
-                            if factor_type != 'GenericProjectionFactorCal3_S2':
-                                print(f"  [跳过删除] Index: {i}, 类型: {factor_type} (这是边缘化锚点)")
-                                continue # 绝不删除边缘化因子
-                            
-                            factor_indices_to_remove_depth.append(i)
-                            print(f"  [确认删除深度] Index: {i}, 类型: {factor_type}, 连接: [{key_str}]")
-                        break
+        # 不再手动删除因子！
+        # 原因：手动删除因子会与Fixed-Lag Smoother的自动边缘化机制冲突
+        # 导致 IndexError: map::at
         
-        self.factor_indices_to_remove = factor_indices_to_remove_depth
-
-        if factor_indices_to_remove_depth:
-            empty_graph = gtsam.NonlinearFactorGraph()
-            empty_values = gtsam.Values()
-            empty_stamps = FixedLagSmootherKeyTimestampMap()
-            self.smoother.update(empty_graph, empty_values, empty_stamps, factor_indices_to_remove_depth)
-            print(f"【Backend】: 成功移除 {len(factor_indices_to_remove_depth)} 个深度为负的路标点的因子")
-
+        # 只删除ID映射，阻止这些landmark再次被添加到图中
         for lm_id in unhealty_lm_ids:
             if lm_id in self.landmark_id_to_gtsam_id:
                 del self.landmark_id_to_gtsam_id[lm_id]
+                print(f"【Backend】: 已移除 landmark {lm_id} 的ID映射")
 
-        print(f"【Backend】: 成功移除 {len(unhealty_lm_ids)} 个路标点的因子")
+        print(f"【Backend】: 成功标记 {len(unhealty_lm_ids)} 个路标点为待清理状态")
+        print(f"【Backend】: Fixed-Lag Smoother 将在滑窗移动时自动清理这些landmark")
+
+
+        # # 删除因子逻辑
+        # print(f"【Backend】: 接收到移除 {len(unhealty_lm_ids)} 个陈旧路标点的指令。")
+        # if not unhealty_lm_ids:
+        #     return
+
+        # graph = self.smoother.getFactors()
+        # factor_indices_to_remove_depth = []
+        # unhealty_lm_keys_depth = {L(self._get_lm_gtsam_id(lm_id)) for lm_id in unhealty_lm_ids_depth}
+
+        # oldest_gtsam_key = None
+        # if oldest_kf_id_in_window is not None and oldest_kf_id_in_window in self.kf_id_to_gtsam_id:
+        #     oldest_gtsam_key = X(self._get_kf_gtsam_id(oldest_kf_id_in_window))
+        #     print(f"【Backend】: 最旧的关键帧的gtsam_id: {oldest_gtsam_key}")
+
+        # # 收集需要删除的因子
+        # for i in range(graph.size()):
+        #     factor = graph.at(i)
+        #     if factor is not None:
+        #         factor_type = factor.__class__.__name__
+                
+        #         # 只删除投影因子，绝不删除边缘化因子、IMU因子等
+        #         if factor_type != 'GenericProjectionFactorCal3_S2':
+        #             continue
+                
+        #         for key in factor.keys():
+        #             if key in unhealty_lm_keys_depth:
+        #                 key_str = ", ".join([gtsam.DefaultKeyFormatter(k) for k in factor.keys()])
+        #                 print(f"  [标记删除] Index: {i}, 类型: {factor_type}, 连接: [{key_str}]")
+        #                 factor_indices_to_remove_depth.append(i)
+        #                 break
+
+        # # 关键修改：只删除因子，不要尝试操作变量的时间戳
+        # if factor_indices_to_remove_depth:
+        #     empty_graph = gtsam.NonlinearFactorGraph()
+        #     empty_values = gtsam.Values()
+        #     # empty_stamps = FixedLagSmootherKeyTimestampMap()
+        #     empty_stamps = {}
+            
+        #     self.smoother.update(empty_graph, empty_values, empty_stamps, factor_indices_to_remove_depth)
+        #     print(f"【Backend】: 成功移除 {len(factor_indices_to_remove_depth)} 个深度为负的路标点的因子")
+
+        # # 删除ID映射 - 修正：只删除那些实际删除了因子的landmark
+        # for lm_id in unhealty_lm_ids_depth:  # 改为 unhealty_lm_ids_depth
+        #     if lm_id in self.landmark_id_to_gtsam_id:
+        #         del self.landmark_id_to_gtsam_id[lm_id]
+
+        # print(f"【Backend】: 成功移除 {len(unhealty_lm_ids)} 个路标点的因子")
         
 
     def initialize_optimize(self, initial_keyframes, initial_imu_factors, initial_landmarks, initial_velocities, initial_bias):
@@ -183,7 +187,8 @@ class Backend:
         graph = gtsam.NonlinearFactorGraph()
         estimates = gtsam.Values()
         
-        initial_window_stamps = FixedLagSmootherKeyTimestampMap()
+        # initial_window_stamps = FixedLagSmootherKeyTimestampMap()
+        initial_window_stamps = {}
 
         for i, kf in enumerate(initial_keyframes):
             kf_gtsam_id = self._get_kf_gtsam_id(kf.get_id())
@@ -203,15 +208,15 @@ class Backend:
             estimates.insert(B(kf_gtsam_id), bias)
 
             # 添加滑窗记录
-            initial_window_stamps.insert((X(kf_gtsam_id), float(kf_gtsam_id)))
-            initial_window_stamps.insert((V(kf_gtsam_id), float(kf_gtsam_id)))
-            initial_window_stamps.insert((B(kf_gtsam_id), float(kf_gtsam_id)))
+            initial_window_stamps[X(kf_gtsam_id)] = float(kf_gtsam_id)
+            initial_window_stamps[V(kf_gtsam_id)] = float(kf_gtsam_id)
+            initial_window_stamps[B(kf_gtsam_id)] = float(kf_gtsam_id)
 
             # 为每一个landmark设置滑窗记录
             last_gtsam_id = self._get_kf_gtsam_id(initial_keyframes[-1].get_id())
             for lm_id in initial_landmarks.keys():
                 lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
-                initial_window_stamps.insert((L(lm_gtsam_id), float(last_gtsam_id))) # 设为最后一帧的ID
+                initial_window_stamps[L(lm_gtsam_id)] = float(last_gtsam_id) # 设为最后一帧的ID
 
             # 为第一帧添加强先验
             if kf_gtsam_id == 0:
@@ -283,7 +288,7 @@ class Backend:
 
         new_graph = gtsam.NonlinearFactorGraph()
         new_estimates = gtsam.Values()
-        new_window_stamps = FixedLagSmootherKeyTimestampMap()
+        new_window_stamps = {}
 
         # 添加新关键帧的状态变量，使用IMU预测值作为初始估计
         kf_gtsam_id = self._get_kf_gtsam_id(new_keyframe.get_id())
@@ -294,9 +299,9 @@ class Backend:
         new_estimates.insert(B(kf_gtsam_id), bias_guess)
 
         # 添加滑窗记录
-        new_window_stamps.insert((X(kf_gtsam_id), float(kf_gtsam_id)))
-        new_window_stamps.insert((V(kf_gtsam_id), float(kf_gtsam_id)))
-        new_window_stamps.insert((B(kf_gtsam_id), float(kf_gtsam_id)))
+        new_window_stamps[X(kf_gtsam_id)] = float(kf_gtsam_id)
+        new_window_stamps[V(kf_gtsam_id)] = float(kf_gtsam_id)
+        new_window_stamps[B(kf_gtsam_id)] = float(kf_gtsam_id)
 
         # 添加IMU因子
         last_kf_gtsam_id = self._get_kf_gtsam_id(last_keyframe.get_id())
@@ -308,6 +313,12 @@ class Backend:
 
         # 添加新路标点顶点，注意这里添加的顶点只在new_estimates中还没有进入isam2的图
         for lm_id, lm_3d_pos in new_landmarks.items():
+            # 检查：如果ID映射已被删除（虽然不太可能发生在新landmark上，但为了安全起见）
+            if lm_id not in self.landmark_id_to_gtsam_id:
+                # 这个landmark可能在三角化后、优化前就被标记为删除了
+                # 这种情况极少见，但需要处理
+                continue
+                
             lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
             # ---!!!--- 在此处添加您要的日志 ---!!!---
             # 打印即将送入优化器的路标点的值
@@ -316,7 +327,7 @@ class Backend:
             # 增加一个NaN/Inf的显式检查，这对于调试崩溃至关重要
             if np.isnan(lm_3d_pos).any() or np.isinf(lm_3d_pos).any():
                 print(f"🔥 【Backend】[致命警告]: 路标点 L{lm_id} 的初始值无效 (NaN/Inf)！优化即将因此崩溃！")
-            # ---!!!--- 日志添加结束 ---!!!---
+                continue  # 直接跳过无效的landmark
 
             # 检查：1) 不在旧图中，2) 还没被添加过 确保顶点只被添加一次
             if not self.smoother.calculateEstimate().exists(L(lm_gtsam_id)):
@@ -325,6 +336,10 @@ class Backend:
         # 添加重投影因子，前面已经添加了新路标点顶点，所以这里只需要添加历史点和新特征点的观测帧重投影因子
         current_isam_values = self.smoother.calculateEstimate()
         for kf_id, lm_id, pt_2d in new_visual_factors:
+            # 关键检查：如果landmark的ID映射已被删除，说明它已被标记为待清理，跳过
+            if lm_id not in self.landmark_id_to_gtsam_id:
+                continue
+                
             kf_gtsam_id = self._get_kf_gtsam_id(kf_id)
             lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
 
@@ -334,30 +349,27 @@ class Backend:
             if kf_exists and lm_exists:
                 factor = gtsam.GenericProjectionFactorCal3_S2(pt_2d, self.visual_robust_noise, X(kf_gtsam_id), L(lm_gtsam_id), self.K, body_P_sensor=self.body_T_cam)
                 new_graph.add(factor)
-                new_window_stamps.insert((L(lm_gtsam_id), float(kf_gtsam_id))) # 这里也需要更新历史路标点的滑窗记录
+                new_window_stamps[L(lm_gtsam_id)] = float(kf_gtsam_id) # 这里也需要更新历史路标点的滑窗记录
 
 
-        # ======================= ZERO-VELOCITY UPDATE (ZUPT) - SOFT CONSTRAINT =======================
+        # ======================= ZERO-VELOCITY UPDATE (ZUPT) & NO-MOTION POSE FACTOR =======================
         if is_stationary:
+            # 添加零速度更新因子
+            last_kf_gtsam_id = self._get_kf_gtsam_id(last_keyframe.get_id())
             kf_gtsam_id = self._get_kf_gtsam_id(new_keyframe.get_id())
-            zero_velocity_noise = gtsam.noiseModel.Isotropic.Sigma(3, 1e-3)
+            zero_velocity_noise = gtsam.noiseModel.Isotropic.Sigma(3, 0.03)
             zero_velocity_prior = gtsam.PriorFactorVector(V(kf_gtsam_id), np.zeros(3), zero_velocity_noise)
             new_graph.add(zero_velocity_prior)
             print("【Backend】: Added Zero-Velocity-Update (ZUPT) factor.")
-            # # 使用BetweenFactor在连续两帧的速度之间添加一个软约束，使它们趋于一致（即速度变化为零）
-            # last_kf_gtsam_id = self._get_kf_gtsam_id(last_keyframe.get_id())
-            # new_kf_gtsam_id = self._get_kf_gtsam_id(new_keyframe.get_id())
 
-            # # 噪声模型相对宽松，允许一定的抖动
-            # zero_velocity_diff_noise = gtsam.noiseModel.Isotropic.Sigma(3, 0.1) 
+            # 添加单位位姿因子
+            no_motion_pose_noise = gtsam.noiseModel.Diagonal.Sigmas(
+                np.array([0.01, 0.01, 0.01,  # 旋转轴 (roll, pitch, yaw)
+                          0.03, 0.03, 0.03])) # 平移 (x, y, z)
             
-            # # 约束 V(new) - V(last) = 0
-            # zupt_factor = gtsam.BetweenFactorVector(V(last_kf_gtsam_id), 
-            #                                         V(new_kf_gtsam_id), 
-            #                                         np.zeros(3), 
-            #                                         zero_velocity_diff_noise)
-            # new_graph.add(zupt_factor)
-            # print("【Backend】: Added soft Zero-Velocity-Update (ZUPT) factor between frames.")
+            new_graph.add(gtsam.BetweenFactorPose3(X(last_kf_gtsam_id), X(kf_gtsam_id),      
+                          gtsam.Pose3(), no_motion_pose_noise))
+            print("【Backend】: Added No-Motion Pose Factor.")
         # ============================================================================================
 
         # 执行iSAM2增量更新
@@ -400,7 +412,7 @@ class Backend:
                   f"本轮新增因子误差 = {new_factors_error:.4f}")
 
             # ======================= DETAILED FACTOR ERROR LOGGING =======================
-            debug_start_frame = 600 # 设为0以立即开始打印
+            debug_start_frame = 0 # 设为0以立即开始打印
             latest_gtsam_id = self.next_gtsam_kf_id - 1
             if latest_gtsam_id >= debug_start_frame:
                 print("\n" + "="*40 + f" DETAILED ERROR ANALYSIS (Frame {latest_gtsam_id}) " + "="*40)

@@ -96,6 +96,9 @@ class Estimator(threading.Thread):
                     visual_features = package['visual_features']
                     feature_ids = package['feature_ids']
                     image = package['image']
+                    is_stationary = package['is_stationary']
+                    if is_stationary:
+                        print(f"【Estimator】: Stationary frame detected at timestamp: {timestamp}")
 
                     # 过滤掉黑名单中的特征点
                     filtered_features = []
@@ -127,7 +130,7 @@ class Estimator(threading.Thread):
                             print(f"【Init】: Collecting frames... {len(active_keyframes)}/{self.init_window_size}")
                     else:
                         # pass
-                        self.process_package_data(new_kf)
+                        self.process_package_data(new_kf, is_stationary)
 
             except queue.Empty:
                 continue
@@ -252,7 +255,7 @@ class Estimator(threading.Thread):
             # 从后端移除异常点
             self.backend.remove_stale_landmarks(landmarks_to_remove, landmarks_to_remove_depth, oldest_kf_id_in_window)
     
-    # 零速检查
+    # 零速检查IMU
     def is_stationary(self, imu_measurements_between_kfs):
         if len(imu_measurements_between_kfs) < 10: # 至少需要一些样本
             return False
@@ -514,7 +517,7 @@ class Estimator(threading.Thread):
         
         return True, ref_kf, curr_kf, ids_best, p1_best, p2_best
 
-    def process_package_data(self, new_kf):
+    def process_package_data(self, new_kf, is_stationary):
         active_kfs = self.local_map.get_active_keyframes()
         if len(active_kfs) < 2:
             return
@@ -531,7 +534,8 @@ class Estimator(threading.Thread):
             print(f"【Estimator】: No IMU factors between KF {last_kf.get_id()} and KF {new_kf.get_id()}.")
             return
 
-        is_currently_stationary = self.is_stationary(imu_factor_data['imu_measurements']) # 零速检查
+        # is_currently_stationary = self.is_stationary(imu_factor_data['imu_measurements']) IMU零速检查
+        is_currently_stationary = is_stationary
 
         # 从后端获取最新的优化结果
         last_pose, last_vel, last_bias = self.backend.get_latest_optimized_state()
