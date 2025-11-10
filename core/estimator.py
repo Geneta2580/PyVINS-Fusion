@@ -234,14 +234,17 @@ class Estimator(threading.Thread):
     def audit_map_after_optimization(self, oldest_kf_id_in_window):
         landmarks_to_remove = []
         landmarks_to_remove_depth = []
+        landmarks_to_remove_reproj = []
         # 遍历所有已三角化的路标点
         for lm_id in self.local_map.get_active_landmarks().keys():
-            is_health_ok, is_depth_ok = self.local_map.check_landmark_health_after_optimization(lm_id)
+            is_health_ok, is_depth_ok, is_reproj_ok = self.local_map.check_landmark_health_after_optimization(lm_id)
             if not is_health_ok:
                 landmarks_to_remove.append(lm_id)
             if not is_depth_ok:
                 landmarks_to_remove_depth.append(lm_id)
-        
+            if not is_reproj_ok:
+                landmarks_to_remove_reproj.append(lm_id)
+
         if landmarks_to_remove:
             print(f"【Audit】: Removing {len(landmarks_to_remove)} landmarks that became unhealthy after optimization: {landmarks_to_remove}")
             # 从LocalMap中删除
@@ -253,7 +256,8 @@ class Estimator(threading.Thread):
                 self.landmark_denylist.add(lm_id)
 
             # 从后端移除异常点
-            self.backend.remove_stale_landmarks(landmarks_to_remove, landmarks_to_remove_depth, oldest_kf_id_in_window)
+            self.backend.remove_stale_landmarks(landmarks_to_remove, landmarks_to_remove_depth, 
+                                                landmarks_to_remove_reproj, oldest_kf_id_in_window)
     
     # 零速检查IMU
     def is_stationary(self, imu_measurements_between_kfs):
@@ -568,10 +572,11 @@ class Estimator(threading.Thread):
         visual_factors_to_add = []
         active_kf_ids = {kf.get_id() for kf in self.local_map.get_active_keyframes()}
         for lm_id in new_landmarks.keys():
-            # DEBUG
-            if lm_id == suspect_lm_id:
-                print(f"🕵️‍ [Trace l{suspect_lm_id}]: Is newly triangulated. Preparing its factors...")
-            # DEBUG
+            # 检查黑名单
+            if lm_id in self.landmark_denylist:
+                print(f"【Denylist Check】: Skipping blacklisted landmark {lm_id} from new triangulation")
+                continue
+            
             lm = self.local_map.landmarks.get(lm_id)
             if lm:
                 # DEBUG
@@ -590,6 +595,10 @@ class Estimator(threading.Thread):
 
         # 添加旧点重投影因子 (不在新三角化列表里)
         for lm_id, pt_2d in zip(new_kf.get_visual_feature_ids(), new_kf.get_visual_features()):
+            # 检查黑名单（防御性检查）
+            if lm_id in self.landmark_denylist:
+                continue
+            
             if lm_id not in new_landmarks:
                 # 必须是活跃点 (没有被剔除) 且已经三角化
                 if lm_id in self.local_map.landmarks and self.local_map.landmarks[lm_id].status == LandmarkStatus.TRIANGULATED:

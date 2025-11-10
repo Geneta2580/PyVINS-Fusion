@@ -43,6 +43,11 @@ cam_intrinsics: [458.654, 0.000, 367.215,
 # 相机畸变参数
 distortion_coefficients: [-0.28340811, 0.07395907, 0.00019359, 1.76187114e-05]
 
+# RANSAC相关参数
+use_ransac: False
+ransac_threshold: 1.0
+ransac_prob: 0.999
+
 # 是否可视化追踪结果
 visualize: True
 

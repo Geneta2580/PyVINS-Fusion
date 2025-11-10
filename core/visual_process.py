@@ -38,6 +38,11 @@ class VisualProcessor:
         # 设置mask
         self.mask = None
 
+        # RANSAC配置
+        self.use_ransac = self.config.get('use_ransac', True)
+        self.ransac_threshold = self.config.get('ransac_threshold', 1.0)  # 像素阈值
+        self.ransac_prob = self.config.get('ransac_prob', 0.999)  # RANSAC置信度
+
     # 提取特征点
     def detect_features(self, gray_image, max_corners, mask=None):
         return cv2.goodFeaturesToTrack(
@@ -169,6 +174,62 @@ class VisualProcessor:
         good_prev = self.prev_pts[final_mask]
         good_curr = curr_pts[final_mask]
         good_ids = self.prev_pt_ids[final_mask]
+
+        # ============== 添加RANSAC几何验证 ==============
+        if self.use_ransac and len(good_curr) >= 8:  # 至少需要8个点
+            # 去畸变特征点用于本质矩阵估计
+            good_prev_undist = self.undistort_points(good_prev)
+            good_curr_undist = self.undistort_points(good_curr)
+            
+            # 归一化坐标（Essential Matrix需要）
+            fx = self.cam_matrix[0, 0]
+            fy = self.cam_matrix[1, 1]
+            cx = self.cam_matrix[0, 2]
+            cy = self.cam_matrix[1, 2]
+            
+            good_prev_norm = np.column_stack([
+                (good_prev_undist[:, 0] - cx) / fx,
+                (good_prev_undist[:, 1] - cy) / fy
+            ])
+            good_curr_norm = np.column_stack([
+                (good_curr_undist[:, 0] - cx) / fx,
+                (good_curr_undist[:, 1] - cy) / fy
+            ])
+            
+            try:
+                # 使用RANSAC估计本质矩阵
+                E, ransac_mask = cv2.findEssentialMat(
+                    good_prev_norm,
+                    good_curr_norm,
+                    focal=1.0,  # 已归一化，使用单位焦距
+                    pp=(0, 0),  # 已归一化，主点为原点
+                    method=cv2.RANSAC,
+                    prob=self.ransac_prob,
+                    threshold=self.ransac_threshold / fx  # 归一化平面的阈值
+                )
+                
+                if ransac_mask is not None:
+                    ransac_mask = ransac_mask.flatten().astype(bool)
+                    
+                    # 统计RANSAC筛选效果
+                    num_before = len(good_curr)
+                    num_after = np.sum(ransac_mask)
+                    outlier_ratio = 1 - (num_after / num_before)
+                    
+                    # 只在outlier比例较高时打印警告
+                    if outlier_ratio > 0.1:
+                        print(f"【RANSAC】Filtered {num_before - num_after}/{num_before} outliers ({outlier_ratio:.1%})")
+                    
+                    # 应用RANSAC mask
+                    good_prev = good_prev[ransac_mask]
+                    good_curr = good_curr[ransac_mask]
+                    good_ids = good_ids[ransac_mask]
+                else:
+                    print("【RANSAC Warning】Failed to compute essential matrix, skipping RANSAC filter")
+                    
+            except cv2.error as e:
+                print(f"【RANSAC Error】{e}, skipping RANSAC filter")
+        # ===============================================
 
         # 更新特征点追踪时间
         for feature_id in good_ids:

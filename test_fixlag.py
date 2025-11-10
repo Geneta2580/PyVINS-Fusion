@@ -1,9 +1,8 @@
 import gtsam
-import gtsam_unstable
 from gtsam.symbol_shorthand import X, L
 import numpy as np
 
-def print_graph_indices(smoother: gtsam_unstable.IncrementalFixedLagSmoother, title: str):
+def print_graph_indices(smoother: gtsam.IncrementalFixedLagSmoother, title: str):
     """
     一个辅助函数，用于打印当前平滑器中所有因子的索引及其关联的变量。
     (已修复 'name l is not defined' 的 bug)
@@ -24,7 +23,8 @@ def print_graph_indices(smoother: gtsam_unstable.IncrementalFixedLagSmoother, ti
             if factor:
                 keys = factor.keys()
                 key_str = ", ".join([gtsam.DefaultKeyFormatter(key) for key in keys])
-                print(f"  [Index {i}]: Factor connects [{key_str}]")
+                factor_type = factor.__class__.__name__
+                print(f"  [Index {i}]: Factor connects [{key_str}], Type: {factor_type}")
             else:
                 # 修复了 'l' 变量 bug
                 print(f"  [Index {i}]: <EmptySlot>") 
@@ -35,49 +35,49 @@ def print_graph_indices(smoother: gtsam_unstable.IncrementalFixedLagSmoother, ti
 
 # 1. 设置一个非常小的滑窗 (lag = 3.0 秒)
 LAG = 3.0
-smoother = gtsam_unstable.IncrementalFixedLagSmoother(LAG)
+smoother = gtsam.IncrementalFixedLagSmoother(LAG)
 
 # 定义噪声模型
-prior_noise_pose = gtsam.noiseModel.Diagonal.Sigmas(gtsam.Point3(1e-6, 1e-6, 1e-6))
+prior_noise_pose = gtsam.noiseModel.Diagonal.Sigmas([1e-6, 1e-6, 1e-6])
 prior_noise_point = gtsam.noiseModel.Isotropic.Sigma(2, 1e-6)
-odom_noise = gtsam.noiseModel.Diagonal.Sigmas(gtsam.Point3(0.1, 0.1, 0.1))
-br_noise = gtsam.noiseModel.Diagonal.Sigmas(gtsam.Point2(np.deg2rad(1.0), 0.1))
+odom_noise = gtsam.noiseModel.Diagonal.Sigmas([0.1, 0.1, 0.1])
+br_noise = gtsam.noiseModel.Diagonal.Sigmas([np.deg2rad(1.0), 0.1])
 
 # 准备空的容器
 new_graph = gtsam.NonlinearFactorGraph()
 new_values = gtsam.Values()
-new_timestamps = gtsam_unstable.FixedLagSmootherKeyTimestampMap()
+new_timestamps = {}
 
 # -----------------------------------------------------------------
 # 步骤 0: 添加 X(0) (锚点) 和 L(0) (路标点)
 # -----------------------------------------------------------------
 pose0 = gtsam.Pose2(0, 0, 0)
-point0 = gtsam.Point2(10, 0) # 路标点在 x=10 处
+point0 = [10, 0] # 路标点在 x=10 处
 new_values.insert(X(0), pose0)
 new_values.insert(L(0), point0) 
 new_graph.add(gtsam.PriorFactorPose2(X(0), pose0, prior_noise_pose))
 new_graph.add(gtsam.PriorFactorPoint2(L(0), point0, prior_noise_point))
 
-new_timestamps.insert((X(0), 0.0))
-new_timestamps.insert((L(0), 0.0))
+new_timestamps[X(0)] = 0.0
+new_timestamps[L(0)] = 0.0
 smoother.update(new_graph, new_values, new_timestamps)
 print_graph_indices(smoother, "步骤 0: 锚点已建立")
 
 # -----------------------------------------------------------------
 # 步骤 1: 添加 X(1)
 # -----------------------------------------------------------------
-new_graph = gtsam.NonlinearFactorGraph(); new_values = gtsam.Values(); new_timestamps = gtsam_unstable.FixedLagSmootherKeyTimestampMap()
+new_graph = gtsam.NonlinearFactorGraph(); new_values = gtsam.Values(); new_timestamps = {}
 pose1 = gtsam.Pose2(1, 0, 0)
 new_values.insert(X(1), pose1)
 new_graph.add(gtsam.BetweenFactorPose2(X(0), X(1), gtsam.Pose2(1, 0, 0), odom_noise))
-new_timestamps.insert((X(1), 1.0))
+new_timestamps[X(1)] = 1.0
 smoother.update(new_graph, new_values, new_timestamps)
 print_graph_indices(smoother, "步骤 1: X(1) 已添加")
 
 # -----------------------------------------------------------------
 # 步骤 2: 添加观测因子 (创建冲突)
 # -----------------------------------------------------------------
-new_graph = gtsam.NonlinearFactorGraph(); new_values = gtsam.Values(); new_timestamps = gtsam_unstable.FixedLagSmootherKeyTimestampMap()
+new_graph = gtsam.NonlinearFactorGraph(); new_values = gtsam.Values(); new_timestamps = {}
 
 # 因子 A: X(0) 观测 L(0) (距离=10)
 # 这是“危险”的因子，因为它连接着 X(0)
@@ -88,7 +88,7 @@ new_graph.add(gtsam.BearingRangeFactor2D(X(0), L(0), gtsam.Rot2.fromDegrees(0), 
 new_graph.add(gtsam.BearingRangeFactor2D(X(1), L(0), gtsam.Rot2.fromDegrees(0), 9.0, br_noise))
 
 # 确保 L(0) 的时间戳被更新，这样它就不会和 X(0) 一起被边缘化
-new_timestamps.insert((L(0), 1.0)) 
+new_timestamps[L(0)] = 1.0 
 
 smoother.update(new_graph, new_values, new_timestamps)
 print_graph_indices(smoother, "步骤 2: 观测已添加")
@@ -117,24 +117,24 @@ print("!"*60)
 # 1. 准备新因子 (添加 X(2) at t=4.0)
 new_graph_crash = gtsam.NonlinearFactorGraph()
 new_values_crash = gtsam.Values()
-new_timestamps_crash = gtsam_unstable.FixedLagSmootherKeyTimestampMap()
+new_timestamps_crash = {}
 
 pose2_main = gtsam.Pose2(2, 0, 0)
 new_values_crash.insert(X(2), pose2_main)
 new_graph_crash.add(gtsam.BetweenFactorPose2(X(1), X(2), gtsam.Pose2(1, 0, 0), odom_noise))
 
 # 2. *** 触发 X(0) 边缘化 ***
-new_timestamps_crash.insert((X(2), 4.0)) # t_latest=4.0, 滑窗=[1.0, 4.0], X(0) 被移出
+new_timestamps_crash[X(2)] = 3.0 # t_latest=4.0, 滑窗=[1.0, 4.0], X(0) 被移出
 # 确保 L(0) 仍在滑窗内
-new_timestamps_crash.insert((L(0), 4.0)) 
+new_timestamps_crash[L(0)] = 3.0 
 
 # 3. 准备要删除的索引 (我们的“危险”因子)
-indices_to_remove_crash = gtsam.KeyVector()
-indices_to_remove_crash.append(3) # <--- 目标！[Index 3]
+indices_to_remove_crash = []
+indices_to_remove_crash.append(4) # <--- 目标！[Index 3]
 
 try:
     # 4. *** 执行合并的“致命”更新 ***
-    smoother.update(new_graph_crash, new_values_crash, new_timestamps_crash, indices_to_remove_crash)
+    smoother.update(new_graph_crash, new_values_crash, new_timestamps_crash)
     
     print_graph_indices(smoother, "步骤 3: 居然没崩溃？ (极不可能)")
 

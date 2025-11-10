@@ -13,6 +13,7 @@ class LocalMap:
         self.max_depth = 400.0
         self.triangulation_max_reprojection_error = 30.0
         self.optimization_max_reprojection_error = 30.0
+        self.optimization_max_delete_reprojection_error = 100.0
 
         self.cam_intrinsics = np.asarray(self.config.get('cam_intrinsics')).reshape(3, 3)
 
@@ -187,13 +188,13 @@ class LocalMap:
         lm = self.landmarks.get(landmark_id)
         # 必须是已三角化的点才有3D位置
         if not lm or lm.position_3d is None:
-            return False, True
+            return False, True, True
 
         observing_kf_ids = [kf_id for kf_id in lm.get_observing_kf_ids() if kf_id in self.keyframes]
         
         # 观测帧数太少，被先验因子约束无法检查，直接返回True
         if len(observing_kf_ids) < 2:
-            return True, True
+            return True, True, True 
 
         # 检查全部KF
         kfs_to_check = [self.keyframes[kf_id] for kf_id in observing_kf_ids]
@@ -220,9 +221,9 @@ class LocalMap:
             if depth <= 0.1 or depth > self.max_depth:
                 if depth < 0.0:
                     print(f"【Optimization Health Check】: Landmark {lm.id} has negative depth in KF {kf.get_id()}. Depth: {depth:.4f}m")
-                    return False, False
+                    return False, False, True
                 print(f"【Optimization Health Check】: Landmark {lm.id} failed depth check in KF {kf.get_id()}. Depth: {depth:.4f}m")
-                return False, True
+                return False, False, True
 
             # 检查重投影误差
             rvec, _ = cv2.Rodrigues(T_cam_world[:3,:3])
@@ -233,7 +234,10 @@ class LocalMap:
 
         reproj_error_avg = reproj_error_total / len(kfs_to_check)
         if reproj_error_avg > self.optimization_max_reprojection_error:
+            if reproj_error_avg > self.optimization_max_delete_reprojection_error:
+                print(f"【Optimization Health Check】: Landmark {lm.id} failed reprojection is too large in KF {kf.get_id()}. Error: {reproj_error_avg:.2f}px")
+                return False, True, False
             print(f"【Optimization Health Check】: Landmark {lm.id} failed reprojection in KF {kf.get_id()}. Error: {reproj_error_avg:.2f}px")
-            return False, True
+            return False, True, True
 
-        return True, True
+        return True, True, True
