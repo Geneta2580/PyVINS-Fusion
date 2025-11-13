@@ -439,7 +439,7 @@ class Estimator(threading.Thread):
             parallax = np.median(np.linalg.norm(p1_cand - p2_cand, axis=1))
 
             # 保证一定的视差，这里是一个非常敏感的参数，每次代码改动都可能需要重新调整这个参数
-            if parallax > 70:
+            if parallax > 40:
                 print(f"【Visual Init】: Found a good pair! (KF {ref_kf.get_id()}, KF {potential_curr_kf.get_id()}) "
                       f"with parallax {parallax:.2f} px.")
 
@@ -564,7 +564,13 @@ class Estimator(threading.Thread):
         new_kf.set_global_pose(predicted_T_wb.matrix())
 
         # 进行新特征点三角化
+        # if not is_stationary:
         new_landmarks = self.triangulate_new_landmarks()
+        # else:
+        #     # 静止状态，不进行新路标点三角化
+        #     new_landmarks = {}
+        print(f"【Tracking】: Not stationary. No new landmarks to triangulate.")
+
         if new_landmarks:
             print(f"【Tracking】: Triangulated {len(new_landmarks)} new landmarks.")
             print(f"【Tracking】: New landmarks: {new_landmarks.keys()}")

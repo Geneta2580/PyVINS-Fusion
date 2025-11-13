@@ -89,7 +89,7 @@ class LocalMap:
     def get_candidate_landmarks(self):
         return [lm for lm in self.landmarks.values() if lm.status == LandmarkStatus.CANDIDATE]
 
-    def check_landmark_health(self, landmark_id, candidate_position_3d=None, min_parallax_angle_deg=2.0):
+    def check_landmark_health(self, landmark_id, candidate_position_3d=None, min_parallax_angle_deg=5.0):
         lm = self.landmarks.get(landmark_id)
         # 必须是已三角化的点才有3D位置
         if not lm:
@@ -108,7 +108,7 @@ class LocalMap:
         witness_kfs = [self.keyframes[kf_id] for kf_id in observing_kf_ids if kf_id in self.keyframes]
 
         # 至少需要2个观测帧
-        if len(witness_kfs) < 2:
+        if len(witness_kfs) < 3:
             return False
             
         positions = []
@@ -118,7 +118,7 @@ class LocalMap:
             if T_w_c is not None:
                 positions.append(T_w_c[:3, 3])
 
-        if len(positions) < 2:
+        if len(positions) < 3:
             return False
             
         positions = np.array(positions)
@@ -162,6 +162,7 @@ class LocalMap:
             
             # 深度必须为正
             depth = point_in_cam_homo[2] / point_in_cam_homo[3]
+            print(f"【Triangulation Health Check】: Landmark {lm.id} depth: {depth:.4f}")
             if depth <= 0.2 or depth > 400.0:
                 print(f"【Triangulation Health Check】: Landmark {lm.id} failed cheirality in KF {kf.get_id()}. Depth: {depth:.4f}m")
                 return False

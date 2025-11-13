@@ -1,3 +1,4 @@
+from hmac import new
 import queue
 import numpy as np
 import gtsam
@@ -22,8 +23,14 @@ class Backend:
         self.smoother = IncrementalFixedLagSmoother(self.lag_window_size, parameters) # 自动边缘化
         
         # 鲁棒因子
-        self.visual_noise = gtsam.noiseModel.Isotropic.Sigma(2, 3.0)
-        self.visual_robust_noise = gtsam.noiseModel.Robust.Create(gtsam.noiseModel.mEstimator.Huber.Create(1.345), self.visual_noise)
+        self.visual_noise = gtsam.noiseModel.Isotropic.Sigma(2, 2.0)
+        self.visual_robust_noise = gtsam.noiseModel.Robust.Create(gtsam.noiseModel.mEstimator.Huber.Create(1.500), self.visual_noise)
+
+        # 添加深度降权参数
+        self.depth_weight_base = config.get('depth_weight_base', 5.0)  # 基础深度阈值（米）
+        self.depth_weight_max = config.get('depth_weight_max', 3.0)  # 最大噪声倍数
+        self.depth_weight_power = config.get('depth_weight_power', 1.5)  # 深度权重指数
+        self.new_landmark_inflation_ratio = config.get('new_landmark_inflation_ratio', 5.0)
 
         # 状态与id管理
         self.kf_id_to_gtsam_id = {}
@@ -245,7 +252,17 @@ class Backend:
                 # 只处理本次优化中新添加的landmark
                 if lm_id in initial_landmarks:
                     lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
-                    factor = gtsam.GenericProjectionFactorCal3_S2(pt_2d, self.visual_robust_noise, X(kf_gtsam_id), L(lm_gtsam_id), self.K, body_P_sensor=self.body_T_cam)
+                    # 计算深度并应用降权
+                    T_wb = gtsam.Pose3(kf.get_global_pose()) # 获取关键帧位姿用于深度计算
+                    current_lm_pos = initial_landmarks[lm_id]
+                    depth = self._compute_landmark_depth(current_lm_pos, T_wb)
+                    # 这里将初始化的点标记为False
+                    weighted_noise = self._get_adaptive_noise(depth, False)
+
+                    factor = gtsam.GenericProjectionFactorCal3_S2(
+                        pt_2d, weighted_noise, X(kf_gtsam_id), L(lm_gtsam_id), 
+                        self.K, body_P_sensor=self.body_T_cam
+                    )
                     graph.add(factor)
 
         # 执行iSAM2的第一次更新（批量模式）
@@ -282,6 +299,7 @@ class Backend:
 
         new_graph = gtsam.NonlinearFactorGraph()
         new_estimates = gtsam.Values()
+        current_isam_values = self.smoother.calculateEstimate()
         new_window_stamps = {}
 
         # 添加新关键帧的状态变量，使用IMU预测值作为初始估计
@@ -326,13 +344,16 @@ class Backend:
                 continue  # 直接跳过无效的landmark
 
             # 检查：1) 不在旧图中，2) 还没被添加过 确保顶点只被添加一次
-            if not self.smoother.calculateEstimate().exists(L(lm_gtsam_id)):
+            if not current_isam_values.exists(L(lm_gtsam_id)):
                 new_estimates.insert(L(lm_gtsam_id), lm_3d_pos)
                 # 添加新路标点的滑窗记录
                 new_window_stamps[L(lm_gtsam_id)] = float(kf_gtsam_id)
         
+        # 如果一个新路标点在 estimates 里，但所有因子都被 chi2 拒绝，必须将其从 estimates 移除
+        # 否则会导致 iSAM2 遇到无约束变量而奇异/崩溃
+        valid_new_landmarks = set()
+
         # 添加重投影因子，前面已经添加了新路标点顶点，所以这里只需要添加历史点和新特征点的观测帧重投影因子
-        current_isam_values = self.smoother.calculateEstimate()
         for kf_id, lm_id, pt_2d in new_visual_factors:
             # 关键检查：如果landmark的ID映射已被删除，说明它已被标记为待清理，跳过
             if lm_id not in self.landmark_id_to_gtsam_id:
@@ -350,13 +371,73 @@ class Backend:
             lm_exists = old_lm_exists or new_lm_exists
 
             if kf_exists and lm_exists:
-                factor = gtsam.GenericProjectionFactorCal3_S2(pt_2d, self.visual_robust_noise, X(kf_gtsam_id), L(lm_gtsam_id), self.K, body_P_sensor=self.body_T_cam)
-                new_graph.add(factor)
+                if new_lm_exists:
+                    lm_3d_pos = new_estimates.atPoint3(L(lm_gtsam_id))
+                    is_new_landmark = True
+                else:  # old_lm_exists
+                    lm_3d_pos = current_isam_values.atPoint3(L(lm_gtsam_id))
+                    is_new_landmark = False
 
-            # 更新历史路标点的滑窗记录
-            if old_lm_exists:
-                new_window_stamps[L(lm_gtsam_id)] = float(kf_gtsam_id)
-            
+                # 2. 获取关键帧位姿（独立判断）
+                if new_kf_exists:
+                    kf_pose = new_estimates.atPose3(X(kf_gtsam_id))
+                else:  # old_kf_exists
+                    kf_pose = current_isam_values.atPose3(X(kf_gtsam_id))
+                
+                # 3. 计算深度并应用降权
+                depth = self._compute_landmark_depth(lm_3d_pos, kf_pose)
+                weighted_noise = self._get_adaptive_noise(depth, is_new_landmark)
+                
+                factor = gtsam.GenericProjectionFactorCal3_S2(
+                    pt_2d, weighted_noise, X(kf_gtsam_id), L(lm_gtsam_id), 
+                    self.K, body_P_sensor=self.body_T_cam
+                )
+
+                # 构造一个临时的 Values 用来计算误差
+                temp_val = gtsam.Values()
+                temp_val.insert(X(kf_gtsam_id), kf_pose)
+                temp_val.insert(L(lm_gtsam_id), lm_3d_pos)
+                
+                error = factor.error(temp_val)
+                
+
+                if is_new_landmark:
+                    # 新点：严格把关，防止初始化错误的点把图拉崩
+                    chi2_threshold = 100.0  # 约等于 14-20 像素误差
+                else:
+                    # 老点：极度宽容！
+                    # 这里的逻辑是：老点已经被之前的帧验证过了，值得信任。
+                    # 如果误差大，说明是 KF Pose (IMU预测) 错了，必须把因子加进去拉回 Pose
+                    chi2_threshold = 2500.0 # 约等于 50-70 像素误差
+
+                # 阈值判断：如果误差太大（例如 > 100），说明即便膨胀了噪声，这个点还是离谱
+                if error < chi2_threshold: 
+                    new_graph.add(factor)
+
+                    # 更新历史路标点的滑窗记录
+                    if old_lm_exists:
+                        new_window_stamps[L(lm_gtsam_id)] = float(kf_gtsam_id)
+                    elif is_new_landmark:
+                        # 如果是新点，且成功添加了因子，标记为有效
+                        valid_new_landmarks.add(lm_gtsam_id)
+                else:
+                    # 可以在这里打印个日志
+                    # print(f"Rejected factor KF{kf_id}-LM{lm_id} with massive error {error:.2f}")
+                    pass
+        
+        # 清理无效的新路标点
+        # 遍历本次尝试添加的所有新路标点
+        for lm_id in list(new_landmarks.keys()): 
+            if lm_id not in self.landmark_id_to_gtsam_id: continue
+            lm_gtsam_id = self._get_lm_gtsam_id(lm_id)
+
+            # 如果它在 estimates 里（说明通过了 NaN 检查），但不在 valid 集合里（说明没因子）
+            if new_estimates.exists(L(lm_gtsam_id)) and lm_gtsam_id not in valid_new_landmarks:
+                # print(f"【Backend】: Cleaning up unconstrained new landmark L{lm_id} (All factors rejected)")
+                new_estimates.erase(L(lm_gtsam_id))
+                if L(lm_gtsam_id) in new_window_stamps:
+                    del new_window_stamps[L(lm_gtsam_id)]
+
         #     print(f"【Backend】: Added {len(new_landmarks)} new landmarks and {len(new_visual_factors)} visual factors.")
         # else:
         #     print("【Backend】: Skipped visual landmarks and factors due to stationary state.")
@@ -476,3 +557,66 @@ class Backend:
             "new_factors_error": new_factors_error
         }
         self.logger.log_state(state_data)
+
+    def _get_adaptive_noise(self, depth, is_new_landmark):
+        """
+        结合深度权重和新点膨胀的自适应噪声模型
+        depth: landmark到相机的深度（米）
+        is_new_landmark: 是否为刚入图的新点
+        """
+        # 1. 第一层：计算基于深度的基础噪声 (Base Sigma)
+        if depth <= self.depth_weight_base:
+            base_sigma = 2.0 # 基础像素噪声
+        else:
+            # 深度越远，噪声越大
+            depth_ratio = depth / self.depth_weight_base
+            # 限制一下最大深度倍数，防止无穷远点导致数值问题
+            clamped_ratio = min(depth_ratio, 5.0) 
+            weight_factor = 1.0 + (clamped_ratio ** self.depth_weight_power) * (self.depth_weight_max - 1.0)
+            base_sigma = 2.0 * weight_factor
+        
+        # 2. 第二层：如果是新点，应用膨胀系数 (Inflation)
+        if is_new_landmark:
+            final_sigma = base_sigma * self.new_landmark_inflation_ratio
+        else:
+            final_sigma = base_sigma
+            
+        # 3. 创建 Huber 鲁棒核噪声模型
+        noise_model = gtsam.noiseModel.Isotropic.Sigma(2, final_sigma)
+        robust_noise = gtsam.noiseModel.Robust.Create(
+            gtsam.noiseModel.mEstimator.Huber.Create(1.345), 
+            noise_model
+        )
+        return robust_noise
+
+    def _compute_landmark_depth(self, lm_3d_pos, kf_pose):
+        """
+        计算landmark相对于关键帧相机的深度
+        lm_3d_pos: landmark的3D位置（世界坐标系，Point3）
+        kf_pose: 关键帧的位姿 T_w_b (gtsam.Pose3)
+        返回: 深度（米）
+        """
+        # 获取body到相机的变换
+        T_bc = self.T_bc
+        R_bc = T_bc[:3, :3]
+        t_bc = T_bc[:3, 3]
+        
+        # 计算相机在世界坐标系下的位置
+        T_w_b = kf_pose.matrix()
+        R_w_b = T_w_b[:3, :3]
+        t_w_b = T_w_b[:3, 3]
+        
+        # 相机位置 = body位置 + R_w_b @ t_bc
+        cam_pos_w = t_w_b + R_w_b @ t_bc
+        
+        # 计算深度（世界坐标系下的距离）
+        # 修复：使用 try-except 而不是 isinstance，因为 gtsam.Point3 可能不可直接访问
+        try:
+            # 尝试使用 x(), y(), z() 方法（GTSAM Point3对象）
+            lm_pos_w = np.array([lm_3d_pos.x(), lm_3d_pos.y(), lm_3d_pos.z()])
+        except AttributeError:
+            # 如果不是Point3对象，直接转换为numpy数组
+            lm_pos_w = np.array(lm_3d_pos)
+        
+        depth = np.linalg.norm(lm_pos_w - cam_pos_w)
+        return depth

@@ -70,8 +70,8 @@ gravity: 9.81
 
 accel_noise_sigma: 0.008          # 从0.002改为0.008
 accel_bias_rw_sigma: 0.001        # 从0.0003改为0.001
-gyro_noise_sigma: 0.005         # 从0.00016968改为0.0008
-gyro_bias_rw_sigma: 0.0008     # 从0.000019393改为0.00008
+gyro_noise_sigma: 0.0008        # 从0.00016968改为0.0008
+gyro_bias_rw_sigma: 0.00008     # 从0.000019393改为0.00008
 
 # accel_noise_sigma: 0.028
 # gyro_noise_sigma: 0.0024
@@ -99,3 +99,9 @@ enable_viewer: True
 
 # 输出轨迹文件路径
 trajectory_output_path: "output/estimated_trajectory.txt" 
+
+# 深度降权参数
+depth_weight_base: 5.0    # 基础深度阈值（米），超过此深度开始降权
+depth_weight_max: 3.0     # 最大噪声倍数（深度很远时噪声增加到3倍）
+depth_weight_power: 1.5    # 深度权重指数，控制降权曲线的陡峭程度 
+new_landmark_inflation_ratio: 5.0    # 新路标点膨胀比例
