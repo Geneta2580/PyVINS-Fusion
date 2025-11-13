@@ -92,13 +92,13 @@ class VIOInitializer:
             dt = pim.deltaTij()
 
             # 获取视觉KF的旋转和平移(注意这里是带外参的)
-            T_i = kf_start.get_global_pose() @ np.linalg.inv(T_bc)
-            R_i = T_i[:3, :3]
-            t_i = T_i[:3, 3]
+            T_i_pose = kf_start.get_global_pose()
+            R_i = (T_i_pose @ np.linalg.inv(T_bc))[:3, :3]  # R_i = R_c0_bi (IMU旋转)
+            t_i = T_i_pose[:3, 3]                         # t_i = p_c0_ci (相机平移)
 
-            T_j = kf_end.get_global_pose() @ np.linalg.inv(T_bc)
-            R_j = T_j[:3, :3]
-            t_j = T_j[:3, 3]
+            T_j_pose = kf_end.get_global_pose()
+            R_j = (T_j_pose @ np.linalg.inv(T_bc))[:3, :3]  # R_j = R_c0_bj (IMU旋转)
+            t_j = T_j_pose[:3, 3]                         # t_j = p_c0_cj (相机平移)
 
             # print(f"【System Init】: t_i: {t_i}")
             # print(f"【System Init】: t_j: {t_j}")
@@ -205,13 +205,13 @@ class VIOInitializer:
                 dt = pim.deltaTij()
 
                 # 获取视觉KF的旋转和平移
-                T_i = kf_start.get_global_pose() @ np.linalg.inv(T_bc)
-                R_i = T_i[:3, :3]
-                t_i = T_i[:3, 3]
+                T_i_pose = kf_start.get_global_pose()
+                R_i = (T_i_pose @ np.linalg.inv(T_bc))[:3, :3]  # R_i = R_c0_bi (IMU旋转)
+                t_i = T_i_pose[:3, 3]                         # t_i = p_c0_ci (相机平移)
 
-                T_j = kf_end.get_global_pose() @ np.linalg.inv(T_bc)
-                R_j = T_j[:3, :3]
-                t_j = T_j[:3, 3]
+                T_j_pose = kf_end.get_global_pose()
+                R_j = (T_j_pose @ np.linalg.inv(T_bc))[:3, :3]  # R_j = R_c0_bj (IMU旋转)
+                t_j = T_j_pose[:3, 3]                         # t_j = p_c0_cj (相机平移)
 
                 # 创建局部的最小二乘雅可比块
                 # (0:3) KF_i的速度，(3:6) KF_j的速度，(6:8) KF的重力(参数化了)，(8) KF的尺度
@@ -275,13 +275,33 @@ class VIOInitializer:
         
         final_trajectory = []
 
-        # 应用计算的尺度因子
+        # 外参矩阵的逆
+        T_cb = np.linalg.inv(T_bc)
+        R_cb = T_cb[:3, :3]
+
+        pose_c0_c0_R = keyframes[0].get_global_pose()[:3, :3]
+        pose_c0_c0_t = keyframes[0].get_global_pose()[:3, 3]
+
+        # 应用计算的尺度因子，转换速度
         print(f"【Initializer】: Applying solved scale ({refine_scale:.4f}) to all poses and velocities...")
         for i in range(len(keyframes)):
-            pose_c0 = keyframes[i].get_global_pose()
-            pose_c0[:3, 3] *= refine_scale
-            keyframes[i].set_global_pose(pose_c0) # 尺度因子写入global_pose
+            pose_c0_bi_with_scale = np.eye(4)
+            pose_c0_ci_R = keyframes[i].get_global_pose()[:3, :3]
+            pose_c0_ci_t = keyframes[i].get_global_pose()[:3, 3]
+
+            # R_c0_ci转换为R_c0_bi
+            pose_c0_bi_with_scale[:3, :3] = pose_c0_ci_R @ R_cb
+            
+            # 尺度因子写入pose_c0_bi
+            pose_c0_bi_with_scale[:3, 3] = refine_scale * pose_c0_ci_t - pose_c0_ci_R @ R_cb @ T_bc[:3, 3] - \
+                                            (refine_scale * pose_c0_c0_t - pose_c0_c0_R @ R_cb @ T_bc[:3, 3])
+            keyframes[i].set_global_pose(pose_c0_bi_with_scale)
+
+            # 速度转换到c0系下
             # velocities[i*3 : i*3+3] *= refine_scale # 这里不需要乘尺度因子，因为速度是相对的
+            v_bi = velocities[i*3 : i*3+3]
+            v_ci = pose_c0_ci_R @ R_cb @ v_bi
+            velocities[i*3 : i*3+3] = v_ci
 
         # 已知两重力，求c0到w系的变换矩阵
         ng1 = refine_gravity / np.linalg.norm(refine_gravity)
@@ -302,24 +322,19 @@ class VIOInitializer:
 
         gravity_w = R_final_w_c0 @ refine_gravity
 
-        R_cb = np.linalg.inv(T_bc[:3, :3])
 
         for i, kf in enumerate(keyframes):
-            pose_c0 = kf.get_global_pose() # 这里是带尺度了的
-            R_c0_ci = pose_c0[:3, :3]
-            p_c0_ci = pose_c0[:3, 3]
-            
-            # 变换姿态和位置
-            R_w_ci = R_final_w_c0 @ R_c0_ci
-            p_w_ci = R_final_w_c0 @ p_c0_ci
+            pose_c0_bi_with_scale= kf.get_global_pose() # 这里是带尺度了的
+            pose_c0_bi_R_with_scale = pose_c0_bi_with_scale[:3, :3]
+            pose_c0_bi_t_with_scale = pose_c0_bi_with_scale[:3, 3]
             
             # 更新KeyFrame中的全局位姿，这里不需要乘外参
             # 因为后续还可以使用global_pose来计算新帧的global_pose(T_w_ci*T_ci_cj)
-            T_w_ci = np.eye(4)
-            T_w_ci[:3, :3] = R_w_ci
-            T_w_ci[:3, 3] = p_w_ci
+            T_w_bi = np.eye(4)
+            T_w_bi[:3, :3] = R_final_w_c0 @ pose_c0_bi_R_with_scale
+            T_w_bi[:3, 3] = R_final_w_c0 @ pose_c0_bi_t_with_scale
             
-            kf.set_global_pose(T_w_ci)
+            kf.set_global_pose(T_w_bi)
 
             # TODO?:对齐到世界系原点
 
@@ -334,8 +349,8 @@ class VIOInitializer:
             # final_trajectory.append(tum_line)
             # 打印初始化的轨迹
 
-            # 变换速度 (速度向量也需要旋转)，这里执行了一次原地修改
-            velocities[i*3 : i*3+3] = R_w_ci @ R_cb @ velocities[i*3 : i*3+3]
+            # 变换速度到世界系下 (速度向量也需要旋转)，这里执行了一次原地修改
+            velocities[i*3 : i*3+3] = R_final_w_c0 @ velocities[i*3 : i*3+3]
 
             print(f"【Initializer】: KF {i}, Velocity: {velocities[i*3 : i*3+3]}")
         

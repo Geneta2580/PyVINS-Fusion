@@ -9,11 +9,16 @@ import time
 class LocalMap:
     def __init__(self, config):
         self.config = config
+
+        # 读取外参
+        T_bc_raw = self.config.get('T_bc', np.eye(4).flatten().tolist())
+        self.T_bc = np.asarray(T_bc_raw).reshape(4, 4)
+
         self.max_keyframes = self.config.get('window_size', 10)
         self.max_depth = 400.0
         self.triangulation_max_reprojection_error = 30.0
         self.optimization_max_reprojection_error = 30.0
-        self.optimization_max_delete_reprojection_error = 100.0
+        self.optimization_max_delete_reprojection_error = 1000.0
 
         self.cam_intrinsics = np.asarray(self.config.get('cam_intrinsics')).reshape(3, 3)
 
@@ -24,7 +29,7 @@ class LocalMap:
     def add_keyframe(self, kf):
         self.keyframes[kf.get_id()] = kf
 
-        suspect_lm_id = 14815 # <--- 设置我们要追踪的目标
+        suspect_lm_id = 7747 # <--- 设置我们要追踪的目标
 
         # 更新Landmark的观测信息，或创建新的Landmark，创建后默认为CANDIDATE
         # DEBUG
@@ -84,7 +89,7 @@ class LocalMap:
     def get_candidate_landmarks(self):
         return [lm for lm in self.landmarks.values() if lm.status == LandmarkStatus.CANDIDATE]
 
-    def check_landmark_health(self, landmark_id, candidate_position_3d=None, min_parallax_angle_deg=3.0):
+    def check_landmark_health(self, landmark_id, candidate_position_3d=None, min_parallax_angle_deg=2.0):
         lm = self.landmarks.get(landmark_id)
         # 必须是已三角化的点才有3D位置
         if not lm:
@@ -102,17 +107,18 @@ class LocalMap:
         observing_kf_ids = lm.get_observing_kf_ids()
         witness_kfs = [self.keyframes[kf_id] for kf_id in observing_kf_ids if kf_id in self.keyframes]
 
-        # 至少需要3个观测帧
-        if len(witness_kfs) < 3:
+        # 至少需要2个观测帧
+        if len(witness_kfs) < 2:
             return False
             
         positions = []
         for kf in witness_kfs:
-            pose = kf.get_global_pose()
-            if pose is not None:
-                positions.append(pose[:3, 3])
+            T_w_b = kf.get_global_pose()
+            T_w_c = T_w_b @ self.T_bc
+            if T_w_c is not None:
+                positions.append(T_w_c[:3, 3])
 
-        if len(positions) < 3:
+        if len(positions) < 2:
             return False
             
         positions = np.array(positions)
@@ -138,6 +144,7 @@ class LocalMap:
         ratio = baseline / depth
         threshold = np.deg2rad(min_parallax_angle_deg)
 
+        print(f"【Triangulation Health Check】: Landmark {lm.id} ratio: {ratio:.4f}, threshold: {threshold:.4f}")
         if ratio < threshold:
             print(f"【Triangulation Health Check】: Landmark {lm.id} failed parallax check. theta: {ratio:.4f}")
             return False
@@ -145,21 +152,23 @@ class LocalMap:
         # 检查重投影误差和深度
         reproj_error_total = 0.0
         for kf in witness_kfs:
-            pose = kf.get_global_pose()
-            if pose is None: continue
+            T_w_b = kf.get_global_pose()
+            if T_w_b is None: continue
 
-            T_cam_world = np.linalg.inv(pose)
-            point_in_cam_homo = T_cam_world @ np.append(landmark_pos, 1.0)
+            # 转换到相机坐标系下
+            T_w_c = T_w_b @ self.T_bc
+            T_c_w = np.linalg.inv(T_w_c)
+            point_in_cam_homo = T_c_w @ np.append(landmark_pos, 1.0)
             
             # 深度必须为正
             depth = point_in_cam_homo[2] / point_in_cam_homo[3]
-            if depth <= 0.1 or depth > 400.0:
+            if depth <= 0.2 or depth > 400.0:
                 print(f"【Triangulation Health Check】: Landmark {lm.id} failed cheirality in KF {kf.get_id()}. Depth: {depth:.4f}m")
                 return False
 
             # 检查重投影误差
-            rvec, _ = cv2.Rodrigues(T_cam_world[:3,:3])
-            tvec = T_cam_world[:3,3]
+            rvec, _ = cv2.Rodrigues(T_c_w[:3,:3])
+            tvec = T_c_w[:3,3]
             reprojected_pt, _ = cv2.projectPoints(landmark_pos.reshape(1,1,3), rvec, tvec, self.cam_intrinsics, None)
             reproj_error = np.linalg.norm(reprojected_pt.flatten() - lm.observations[kf.get_id()])
             reproj_error_total += reproj_error
@@ -210,24 +219,25 @@ class LocalMap:
 
         reproj_error_total = 0.0
         for kf in kfs_to_check:
-            pose = kf.get_global_pose()
-            if pose is None: continue
+            T_w_b = kf.get_global_pose()
+            if T_w_b is None: continue
 
-            T_cam_world = np.linalg.inv(pose)
-            point_in_cam_homo = T_cam_world @ np.append(lm.position_3d, 1.0)
+            T_w_c = T_w_b @ self.T_bc
+            T_c_w = np.linalg.inv(T_w_c)
+            point_in_cam_homo = T_c_w @ np.append(lm.position_3d, 1.0)
             
             # 检查深度是否为正且在合理范围内
             depth = point_in_cam_homo[2]
-            if depth <= 0.1 or depth > self.max_depth:
+            if depth <= 0.2 or depth > self.max_depth:
                 if depth < 0.0:
                     print(f"【Optimization Health Check】: Landmark {lm.id} has negative depth in KF {kf.get_id()}. Depth: {depth:.4f}m")
                     return False, False, True
                 print(f"【Optimization Health Check】: Landmark {lm.id} failed depth check in KF {kf.get_id()}. Depth: {depth:.4f}m")
-                return False, False, True
+                return False, True, True
 
             # 检查重投影误差
-            rvec, _ = cv2.Rodrigues(T_cam_world[:3,:3])
-            tvec = T_cam_world[:3,3]
+            rvec, _ = cv2.Rodrigues(T_c_w[:3,:3])
+            tvec = T_c_w[:3,3]
             reprojected_pt, _ = cv2.projectPoints(lm.position_3d.reshape(1,1,3), rvec, tvec, self.cam_intrinsics, None)
             reproj_error = np.linalg.norm(reprojected_pt.flatten() - lm.observations[kf.get_id()])
             reproj_error_total += reproj_error

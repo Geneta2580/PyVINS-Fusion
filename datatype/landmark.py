@@ -60,5 +60,5 @@ class Landmark:
         if parallax > min_parallax:
             return True, first_kf, last_kf
         else:
-            print(f"[Trace l{self.id}]: FAILED triangulation check. Parallax: {parallax:.2f}px")
+            # print(f"[Trace l{self.id}]: FAILED triangulation check. Parallax: {parallax:.2f}px")
             return False, None, None

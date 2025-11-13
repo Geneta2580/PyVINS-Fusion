@@ -366,7 +366,14 @@ class VisualProcessor:
                                   if self.feature_ages.get(fid, 0) >= self.long_track_age_threshold)
             long_track_ratio = long_track_count / len(good_ids)
             
-            info_text1 = f"Features: {len(good_ids)} | Long: {long_track_ratio:.0%} | KF: {is_kf} | Stationary: {is_stationary} | Parallax: {mean_parallax:.2f}"
+            # 计算追踪成功率
+            if hasattr(self, 'prev_pt_ids') and len(self.prev_pt_ids) > 0:
+                tracking_rate = len(good_ids) / len(self.prev_pt_ids)
+                info_text1 = (f"Features: {len(good_ids)}/{len(self.prev_pt_ids)} ({tracking_rate:.0%}) | "
+                             f"KF: {is_kf} | "
+                             f"Stationary: {is_stationary} | Parallax: {mean_parallax:.2f}")
+            else:
+                info_text1 = f"Features: {len(good_ids)} | Long: {long_track_ratio:.0%} | KF: {is_kf} | Stationary: {is_stationary} | Parallax: {mean_parallax:.2f}"
         else:
             info_text1 = f"Features: 0 | KF: {is_kf}"
         

@@ -63,15 +63,15 @@ gravity: 9.81
 # gyro_noise_sigma: 0.0002
 # gyro_bias_rw_sigma: 0.00002
 
-# accel_noise_sigma: 0.002 
+# accel_noise_sigma: 0.002
+# accel_bias_rw_sigma: 0.0003
 # gyro_noise_sigma: 0.00016968
-# accel_bias_rw_sigma: 0.003
 # gyro_bias_rw_sigma: 0.000019393
 
-accel_noise_sigma: 0.002
-accel_bias_rw_sigma: 0.0003
-gyro_noise_sigma: 0.00016968
-gyro_bias_rw_sigma: 0.000019393
+accel_noise_sigma: 0.008          # 从0.002改为0.008
+accel_bias_rw_sigma: 0.001        # 从0.0003改为0.001
+gyro_noise_sigma: 0.005         # 从0.00016968改为0.0008
+gyro_bias_rw_sigma: 0.0008     # 从0.000019393改为0.00008
 
 # accel_noise_sigma: 0.028
 # gyro_noise_sigma: 0.0024
@@ -81,6 +81,9 @@ gyro_bias_rw_sigma: 0.000019393
 
 # 初始化窗口大小
 init_window_size: 10
+
+# 边缘化窗口大小
+lag_window_size: 9 # 10-1
 
 # 初始化外参
 T_bc: [0.0148655429818, -0.999880929698, 0.00414029679422, -0.0216401454975,

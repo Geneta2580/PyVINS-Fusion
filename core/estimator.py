@@ -165,11 +165,11 @@ class Estimator(threading.Thread):
         
     # TODO:def check_motion_excitement(self):
 
-    def triangulate_new_landmarks(self, new_kf):
+    def triangulate_new_landmarks(self):
         newly_triangulated_for_backend = {}
         keyframe_window = self.local_map.get_active_keyframes()
         # DEBUG
-        suspect_lm_id = 14815
+        suspect_lm_id = 7747
         # DEBUG
         for lm in self.local_map.get_candidate_landmarks():
             # DEBUG
@@ -177,7 +177,7 @@ class Estimator(threading.Thread):
                 print(f"🕵️‍ [Trace l{suspect_lm_id}]: Is a candidate. Checking for triangulation...")
             # DEBUG
             
-            is_ready, first_kf, last_kf = lm.is_ready_for_triangulation(keyframe_window, min_parallax=70)
+            is_ready, first_kf, last_kf = lm.is_ready_for_triangulation(keyframe_window, min_parallax=40)
 
             # DEBUG
             if lm.id == suspect_lm_id and is_ready:
@@ -185,15 +185,17 @@ class Estimator(threading.Thread):
             # DEBUG
             
             if is_ready:
-                pose1 = first_kf.get_global_pose()
-                pose2 = last_kf.get_global_pose()
+                T_w_b_1 = first_kf.get_global_pose()
+                T_w_b_2 = last_kf.get_global_pose()
                 
-                if pose1 is None or pose2 is None:
+                if T_w_b_1 is None or T_w_b_2 is None:
                     continue
 
-                T_2_1 = np.linalg.inv(pose2) @ pose1
+                T_w_c_1 = T_w_b_1 @ self.T_bc
+                T_w_c_2 = T_w_b_2 @ self.T_bc
+                T_c_2_1 = np.linalg.inv(T_w_c_2) @ T_w_c_1
 
-                R, t = T_2_1[:3, :3], T_2_1[:3, 3].reshape(3, 1)
+                R, t = T_c_2_1[:3, :3], T_c_2_1[:3, 3].reshape(3, 1)
 
                 pts1 = np.array([lm.get_observation(first_kf.get_id())])
                 pts2 = np.array([lm.get_observation(last_kf.get_id())])
@@ -201,7 +203,7 @@ class Estimator(threading.Thread):
                 points_3d_in_c1, mask = self.sfm_processor.triangulate_points(pts1, pts2, R, t)
 
                 if len(points_3d_in_c1) > 0:
-                    points_3d_world = (pose1[:3, :3] @ points_3d_in_c1.T + pose1[:3, 3].reshape(3, 1)).flatten()
+                    points_3d_world = (T_w_c_1[:3, :3] @ points_3d_in_c1.T + T_w_c_1[:3, 3].reshape(3, 1)).flatten()
                     # DEBUG
                     if lm.id == suspect_lm_id:
                         print(f"🕵️‍ [Trace l{suspect_lm_id}]: TRIANGULATED successfully to position {points_3d_world}.")
@@ -324,19 +326,21 @@ class Estimator(threading.Thread):
 
         if alignment_success:
             # 重三角化地图点
-            # 获取最终的位姿T_wc
-            final_pose_ref = ref_kf.get_global_pose()
-            final_pose_curr = curr_kf.get_global_pose()
+            # 获取最终的位姿T_wb
+            final_pose_w_b_ref = ref_kf.get_global_pose()
+            final_pose_w_c_ref = final_pose_w_b_ref @ self.T_bc
+            final_pose_w_b_curr = curr_kf.get_global_pose()
+            final_pose_w_c_curr = final_pose_w_b_curr @ self.T_bc
 
             # 获取具有尺度的T_curr_ref
-            final_T_curr_ref = np.linalg.inv(final_pose_curr) @ final_pose_ref
+            final_T_curr_ref = np.linalg.inv(final_pose_w_c_curr) @ final_pose_w_c_ref
             final_R, final_t = final_T_curr_ref[:3, :3], final_T_curr_ref[:3, 3].reshape(3, 1)
 
             # 恢复具有尺度的3d landmark，相对于ref_kf的坐标
             final_points_3d_in_ref_frame, final_mask = self.sfm_processor.triangulate_points(p1_best, p2_best, final_R, final_t)
 
             # 转换到世界坐标系
-            points_3d_world = (final_pose_ref[:3, :3] @ final_points_3d_in_ref_frame.T + final_pose_ref[:3, 3].reshape(3, 1)).T
+            points_3d_world = (final_pose_w_c_ref[:3, :3] @ final_points_3d_in_ref_frame.T + final_pose_w_c_ref[:3, 3].reshape(3, 1)).T
 
             # 加入地图
             valid_ids = np.array(ids_best)[final_mask]
@@ -413,6 +417,8 @@ class Estimator(threading.Thread):
     
     def visual_initialization(self, initial_keyframes):
         print("【Visual Init】: Searching for the best keyframe pair...")
+        
+        # 默认第一帧Pose为单位矩阵
         ref_kf = initial_keyframes[0]
         ref_kf.set_global_pose(np.eye(4))
 
@@ -552,20 +558,19 @@ class Estimator(threading.Thread):
         predicted_nav_state = pim.predict(gtsam.NavState(last_pose, last_vel), last_bias)
 
         predicted_T_wb = predicted_nav_state.pose()
-        predicted_T_wc = predicted_T_wb.compose(gtsam.Pose3(self.T_bc))
         predicted_vel = predicted_nav_state.velocity()
 
         # 设置临时预测位姿
-        new_kf.set_global_pose(predicted_T_wc.matrix())
+        new_kf.set_global_pose(predicted_T_wb.matrix())
 
         # 进行新特征点三角化
-        new_landmarks = self.triangulate_new_landmarks(new_kf)
+        new_landmarks = self.triangulate_new_landmarks()
         if new_landmarks:
             print(f"【Tracking】: Triangulated {len(new_landmarks)} new landmarks.")
             print(f"【Tracking】: New landmarks: {new_landmarks.keys()}")
 
         # DEBUG
-        suspect_lm_id = 14815
+        suspect_lm_id = 7747
         # DEBUG
         
         # 为后端准备重投影因子

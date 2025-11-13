@@ -17,7 +17,7 @@ class Backend:
         # 使用 iSAM2 作为优化器
         self.lag_window_size = config.get('lag_window_size', 9) # 优化器的滑窗
         parameters = gtsam.ISAM2Params()
-        parameters.setRelinearizeThreshold(0.001) 
+        parameters.setRelinearizeThreshold(0.01) 
         parameters.relinearizeSkip = 1
         self.smoother = IncrementalFixedLagSmoother(self.lag_window_size, parameters) # 自动边缘化
         
@@ -96,12 +96,9 @@ class Backend:
             gtsam_id = self.kf_id_to_gtsam_id.get(kf.get_id())
             if gtsam_id is not None and optimized_results.exists(X(gtsam_id)):
                 
-                # 从优化结果中获取最新的IMU位姿 T_w_b
+                # 从优化结果中获取最新的IMU位姿 T_w_b并更新
                 pose_w_b = optimized_results.atPose3(X(gtsam_id))
-                
-                # 转换回相机位姿 T_w_c 并更新
-                pose_w_c = pose_w_b.compose(self.body_T_cam)
-                kf.set_global_pose(pose_w_c.matrix())
+                kf.set_global_pose(pose_w_b.matrix())
 
         # 更新路标点坐标
         for lm_id, landmark_obj in landmarks.items():
@@ -131,7 +128,6 @@ class Backend:
 
         print(f"【Backend】: 成功标记 {len(unhealty_lm_ids)} 个路标点为待清理状态")
         print(f"【Backend】: Fixed-Lag Smoother 将在滑窗移动时自动清理这些landmark")
-
 
         # # 删除因子逻辑
         # print(f"【Backend】: 接收到移除 {len(unhealty_lm_ids)} 个陈旧路标点的指令。")
@@ -197,8 +193,7 @@ class Backend:
             kf_gtsam_id = self._get_kf_gtsam_id(kf.get_id())
 
             # 从初始化结果中获取位姿、速度和偏置
-            T_wc = gtsam.Pose3(kf.get_global_pose())
-            T_wb = T_wc.compose(self.cam_T_body)
+            T_wb = gtsam.Pose3(kf.get_global_pose())
             # initial_velocities 是一个扁平化的数组，每3个元素是一个速度向量
             velocity = initial_velocities[i*3 : i*3+3]
             
@@ -218,15 +213,11 @@ class Backend:
             # 为第一帧添加强先验
             if kf_gtsam_id == 0:
                 prior_pose_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([1e-4]*3 + [1e-2]*3))
-                prior_vel_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([1e-2] * 3))
-                prior_bias_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([1e-2]*3 + [1e-3]*3))
+                prior_vel_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([2e-2] * 3))
+                prior_bias_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([1e-1]*3 + [1e-2]*3))
                 graph.add(gtsam.PriorFactorPose3(X(0), T_wb, prior_pose_noise))
                 graph.add(gtsam.PriorFactorVector(V(0), velocity, prior_vel_noise))
                 graph.add(gtsam.PriorFactorConstantBias(B(0), bias, prior_bias_noise))
-            elif kf_gtsam_id == len(initial_keyframes) - 1:
-                # 为最后一帧添加较弱的位置先验以稳定尺度
-                prior_pose_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([0.1]*3 + [0.5]*3))
-                graph.add(gtsam.PriorFactorPose3(X(kf_gtsam_id), T_wb, prior_pose_noise))
         
         # 为每一个landmark设置滑窗记录
         last_gtsam_id = self._get_kf_gtsam_id(initial_keyframes[-1].get_id())
@@ -448,7 +439,7 @@ class Backend:
                         error = factor.error(optimized_result)
                         
                         # 打印误差大于阈值的因子，以避免日志刷屏
-                        if error > 100.0: 
+                        if error > 10.0: 
                             # 打印因子的Python类名
                             factor_type = factor.__class__.__name__
                             print(f"  - Factor {i}: Error = {error:.4f}, Type = {factor_type}")
