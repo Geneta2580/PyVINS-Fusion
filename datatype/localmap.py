@@ -16,8 +16,8 @@ class LocalMap:
 
         self.max_keyframes = self.config.get('window_size', 10)
         self.max_depth = 400.0
-        self.triangulation_max_reprojection_error = 30.0
-        self.optimization_max_reprojection_error = 30.0
+        self.triangulation_max_reprojection_error = 40.0
+        self.optimization_max_reprojection_error = 40.0
         self.optimization_max_delete_reprojection_error = 1000.0
 
         self.cam_intrinsics = np.asarray(self.config.get('cam_intrinsics')).reshape(3, 3)

@@ -24,8 +24,10 @@ class Backend:
         
         # 鲁棒因子
         self.visual_noise = gtsam.noiseModel.Isotropic.Sigma(2, 2.0)
-        self.visual_robust_noise = gtsam.noiseModel.Robust.Create(gtsam.noiseModel.mEstimator.Huber.Create(1.500), self.visual_noise)
+        self.visual_robust_noise = gtsam.noiseModel.Robust.Create(gtsam.noiseModel.mEstimator.Huber.Create(1.345), self.visual_noise)
 
+        # 是否使用深度降权
+        self.use_depth_weight = config.get('use_depth_weight', False)
         # 添加深度降权参数
         self.depth_weight_base = config.get('depth_weight_base', 5.0)  # 基础深度阈值（米）
         self.depth_weight_max = config.get('depth_weight_max', 3.0)  # 最大噪声倍数
@@ -384,8 +386,10 @@ class Backend:
                 else:  # old_kf_exists
                     kf_pose = current_isam_values.atPose3(X(kf_gtsam_id))
                 
-                # 3. 计算深度并应用降权
-                depth = self._compute_landmark_depth(lm_3d_pos, kf_pose)
+                if self.use_depth_weight:
+                    depth = self._compute_landmark_depth(lm_3d_pos, kf_pose) # 计算深度并应用降权
+                else:
+                    depth = None
                 weighted_noise = self._get_adaptive_noise(depth, is_new_landmark)
                 
                 factor = gtsam.GenericProjectionFactorCal3_S2(
@@ -400,7 +404,6 @@ class Backend:
                 
                 error = factor.error(temp_val)
                 
-
                 if is_new_landmark:
                     # 新点：严格把关，防止初始化错误的点把图拉崩
                     chi2_threshold = 100.0  # 约等于 14-20 像素误差
@@ -408,7 +411,7 @@ class Backend:
                     # 老点：极度宽容！
                     # 这里的逻辑是：老点已经被之前的帧验证过了，值得信任。
                     # 如果误差大，说明是 KF Pose (IMU预测) 错了，必须把因子加进去拉回 Pose
-                    chi2_threshold = 2500.0 # 约等于 50-70 像素误差
+                    chi2_threshold = 150.0 # 约等于 50-70 像素误差
 
                 # 阈值判断：如果误差太大（例如 > 100），说明即便膨胀了噪声，这个点还是离谱
                 if error < chi2_threshold: 
@@ -565,15 +568,18 @@ class Backend:
         is_new_landmark: 是否为刚入图的新点
         """
         # 1. 第一层：计算基于深度的基础噪声 (Base Sigma)
-        if depth <= self.depth_weight_base:
-            base_sigma = 2.0 # 基础像素噪声
+        if depth is None:
+            base_sigma = 2.0
         else:
-            # 深度越远，噪声越大
-            depth_ratio = depth / self.depth_weight_base
-            # 限制一下最大深度倍数，防止无穷远点导致数值问题
-            clamped_ratio = min(depth_ratio, 5.0) 
-            weight_factor = 1.0 + (clamped_ratio ** self.depth_weight_power) * (self.depth_weight_max - 1.0)
-            base_sigma = 2.0 * weight_factor
+            if depth <= self.depth_weight_base:
+                base_sigma = 2.0 # 基础像素噪声
+            else:
+                # 深度越远，噪声越大
+                depth_ratio = depth / self.depth_weight_base
+                # 限制一下最大深度倍数，防止无穷远点导致数值问题
+                clamped_ratio = min(depth_ratio, 5.0) 
+                weight_factor = 1.0 + (clamped_ratio ** self.depth_weight_power) * (self.depth_weight_max - 1.0)
+                base_sigma = 2.0 * weight_factor
         
         # 2. 第二层：如果是新点，应用膨胀系数 (Inflation)
         if is_new_landmark:
@@ -584,18 +590,12 @@ class Backend:
         # 3. 创建 Huber 鲁棒核噪声模型
         noise_model = gtsam.noiseModel.Isotropic.Sigma(2, final_sigma)
         robust_noise = gtsam.noiseModel.Robust.Create(
-            gtsam.noiseModel.mEstimator.Huber.Create(1.345), 
+            gtsam.noiseModel.mEstimator.Huber.Create(2.5), 
             noise_model
         )
         return robust_noise
 
     def _compute_landmark_depth(self, lm_3d_pos, kf_pose):
-        """
-        计算landmark相对于关键帧相机的深度
-        lm_3d_pos: landmark的3D位置（世界坐标系，Point3）
-        kf_pose: 关键帧的位姿 T_w_b (gtsam.Pose3)
-        返回: 深度（米）
-        """
         # 获取body到相机的变换
         T_bc = self.T_bc
         R_bc = T_bc[:3, :3]
