@@ -5,7 +5,7 @@
 # euroc：/home/pangjunxiang/dataset/Euroc/MH_01_easy
 # tum：/home/pangjunxiang/dataset/TUM/freiburg1
 # kitti:
-dataset_path: "/home/geneta/dataset/MH_01_EASY"
+dataset_path: "/home/geneta/dataset/MH_02_EASY"
 
 # 支持euroc和tum数据集
 dataset_type: "euroc"
@@ -68,9 +68,9 @@ gravity: 9.81
 # gyro_noise_sigma: 0.00016968
 # gyro_bias_rw_sigma: 0.000019393
 
-accel_noise_sigma: 0.004          # 从0.002改为0.008
+accel_noise_sigma: 0.008          # 从0.002改为0.008
 accel_bias_rw_sigma: 0.0003        # 从0.0003改为0.001
-gyro_noise_sigma: 0.0002        # 从0.00016968改为0.0008
+gyro_noise_sigma: 0.0004        # 从0.00016968改为0.0008
 gyro_bias_rw_sigma: 0.00004     # 从0.000019393改为0.00008
 
 # accel_noise_sigma: 0.028
@@ -101,7 +101,9 @@ use_depth_weight: False
 depth_weight_base: 5.0    # 基础深度阈值（米），超过此深度开始降权
 depth_weight_max: 3.0     # 最大噪声倍数（深度很远时噪声增加到3倍）
 depth_weight_power: 1.5    # 深度权重指数，控制降权曲线的陡峭程度 
-new_landmark_inflation_ratio: 5.0    # 新路标点膨胀比例
+
+# 新路标点噪声膨胀比例 (权重膨胀比例越大，新路标点权重越小)
+new_landmark_inflation_ratio: 1.0    
 
 
 # ----------------------------------------------------------------------------

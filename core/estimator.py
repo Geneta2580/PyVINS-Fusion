@@ -439,7 +439,7 @@ class Estimator(threading.Thread):
             parallax = np.median(np.linalg.norm(p1_cand - p2_cand, axis=1))
 
             # 保证一定的视差，这里是一个非常敏感的参数，每次代码改动都可能需要重新调整这个参数
-            if parallax > 40:
+            if parallax > 70:
                 print(f"【Visual Init】: Found a good pair! (KF {ref_kf.get_id()}, KF {potential_curr_kf.get_id()}) "
                       f"with parallax {parallax:.2f} px.")
 
@@ -643,7 +643,7 @@ class Estimator(threading.Thread):
         
         # 审计地图，移除所有变得不健康的“坏苹果”
         start_time = time.time()
-        self.audit_map_after_optimization(oldest_kf_id_in_window)
+        # self.audit_map_after_optimization(oldest_kf_id_in_window)
         end_time = time.time()
         print(f"【Estimator Timer】: Map Audit took {(end_time - start_time) * 1000:.3f} ms.")
         
